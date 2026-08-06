@@ -36,7 +36,7 @@ func (r GORMRefreshToken) Rotate(c context.Context, h string, now time.Time, iss
 		if err := tx.Table(scopedTable(r.Schema, "refresh_tokens")).Where("id = ?", old.ID).UpdateColumn("revoked_at", now).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(next).Error; err != nil {
+		if err := tx.Table(scopedTable(r.Schema, "refresh_tokens")).Create(next).Error; err != nil {
 			return err
 		}
 		out = *next

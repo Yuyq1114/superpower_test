@@ -77,25 +77,35 @@ func (x *memTokens) Revoke(_ context.Context, h string, now time.Time) error {
 }
 
 type memUnitOfWork struct {
-	users  *memUsers
-	tokens *memTokens
-	fail   error
+	users         *memUsers
+	tokens        *memTokens
+	failAfterUser bool
+	fail          error
 }
 
 func (x memUnitOfWork) CreateUserWithRefreshToken(c context.Context, u *model.User, token *model.RefreshToken) error {
-	if x.fail != nil {
-		return x.fail
+	userSnapshot := make(map[string]model.User, len(x.users.m))
+	for key, value := range x.users.m {
+		userSnapshot[key] = value
+	}
+	tokenSnapshot := make(map[string]model.RefreshToken, len(x.tokens.m))
+	for key, value := range x.tokens.m {
+		tokenSnapshot[key] = value
 	}
 	if err := x.users.Create(c, u); err != nil {
 		return err
 	}
+	if x.failAfterUser {
+		x.users.m = userSnapshot
+		x.tokens.m = tokenSnapshot
+		return x.fail
+	}
 	return x.tokens.Create(c, token)
 }
-
 func TestRegisterTransactionFailureLeavesNoUser(t *testing.T) {
 	users := &memUsers{map[string]model.User{}}
 	tokens := &memTokens{m: map[string]model.RefreshToken{}}
-	s := NewAuthService(users, tokens, memUnitOfWork{users: users, tokens: tokens, fail: errors.New("token insert failed")}, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
+	s := NewAuthService(users, tokens, memUnitOfWork{users: users, tokens: tokens, failAfterUser: true, fail: errors.New("token insert failed")}, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
 	if _, _, err := s.Register(context.Background(), "rollback@example.com", "ValidPass123"); apperror.CodeOf(err) != apperror.CodeInternal {
 		t.Fatalf("register: %v", err)
 	}

@@ -16,9 +16,14 @@ func requestLogger(logger *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		requestID, traceID := requestIDs(ctx)
 		resp, err := handler(ctx, req)
-		logger.LogAttrs(ctx, slog.LevelInfo, "request completed", slog.String("request_id", requestID), slog.String("trace_id", traceID), slog.String("user_id", ""), slog.String("method", info.FullMethod), slog.Any("error", err))
+		logger.LogAttrs(ctx, slog.LevelInfo, "request completed", slog.String("request_id", requestID), slog.String("trace_id", traceID), slog.String("user_id", userID(ctx)), slog.String("method", info.FullMethod), slog.Any("error", err))
 		return resp, err
 	}
+}
+
+func userID(ctx context.Context) string {
+	md, _ := metadata.FromIncomingContext(ctx)
+	return firstMetadata(md, "x-user-id")
 }
 
 func requestIDs(ctx context.Context) (string, string) {

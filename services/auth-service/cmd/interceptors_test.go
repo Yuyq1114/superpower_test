@@ -16,7 +16,7 @@ func TestRequestLoggerFieldsAndSensitiveData(t *testing.T) {
 	var output bytes.Buffer
 	logger := observability.NewLogger("auth-service", &output)
 	interceptor := requestLogger(logger)
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "request-1", "x-trace-id", "trace-1", "authorization", "Bearer secret-token"))
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "request-1", "x-trace-id", "trace-1", "x-user-id", "user-42", "authorization", "Bearer secret-token"))
 	_, err := interceptor(ctx, struct{ Password string }{Password: "secret-password"}, &grpc.UnaryServerInfo{FullMethod: "/auth.v1.AuthService/Login"}, func(context.Context, any) (any, error) { return nil, nil })
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func TestRequestLoggerFieldsAndSensitiveData(t *testing.T) {
 			t.Errorf("missing log field %s", key)
 		}
 	}
-	if entry["request_id"] != "request-1" || entry["trace_id"] != "trace-1" {
+	if entry["request_id"] != "request-1" || entry["trace_id"] != "trace-1" || entry["user_id"] != "user-42" {
 		t.Fatalf("request identifiers: %#v", entry)
 	}
 	if bytes.Contains(output.Bytes(), []byte("secret-token")) || bytes.Contains(output.Bytes(), []byte("secret-password")) {
