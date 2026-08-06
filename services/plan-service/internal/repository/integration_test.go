@@ -35,11 +35,5 @@ func TestIntegrationMigrateAndCreate(t *testing.T) {
 	}
 }
 func MigrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
-	q := `"` + schema + `"`
-	for _, x := range []string{`CREATE TABLE IF NOT EXISTS ` + q + `.plans (id text PRIMARY KEY,user_id text NOT NULL,name text NOT NULL,status text NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_days (id text PRIMARY KEY,user_id text NOT NULL,plan_id text NOT NULL,workout_date date NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_items (id text PRIMARY KEY,user_id text NOT NULL,workout_day_id text NOT NULL,name text NOT NULL,sets integer NOT NULL,repetitions integer NOT NULL,weight double precision NOT NULL,duration_seconds integer NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`} {
-		if e := db.WithContext(ctx).Exec(x).Error; e != nil {
-			return e
-		}
-	}
-	return nil
+	return migrateSchema(ctx, db, schema)
 }

@@ -11,9 +11,11 @@ import (
 	plangrpc "github.com/example/fitness-checkin/services/plan-service/internal/grpc"
 	"github.com/example/fitness-checkin/services/plan-service/internal/repository"
 	"github.com/example/fitness-checkin/services/plan-service/internal/service"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"log/slog"
 	"net"
 	"net/http"
@@ -46,7 +48,7 @@ func main() {
 	}
 	reg := observability.NewRegistry()
 	m := observability.NewMetrics(reg)
-	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(deadline(5*time.Second), metrics(m)))
+	gs := grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: false}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20), grpc.ChainUnaryInterceptor(deadline(5*time.Second), requestLogger(logger), metrics(m)))
 	planv1.RegisterPlanServiceServer(gs, plangrpc.NewServer(service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema})))
 	lis, e := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if e != nil {
@@ -81,7 +83,13 @@ func main() {
 	shutdown, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	_ = hs.Shutdown(shutdown)
-	gs.GracefulStop()
+	done := make(chan struct{})
+	go func() { gs.GracefulStop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		gs.Stop()
+	}
 	_ = lis.Close()
 	if sql, e := db.DB(); e == nil {
 		_ = sql.Close()
@@ -111,3 +119,37 @@ func metrics(m *observability.Metrics) grpc.UnaryServerInterceptor {
 }
 
 var _ = keepalive.ServerParameters{}
+
+func requestLogger(logger *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		requestID, traceID := requestIDs(ctx)
+		resp, err := handler(ctx, req)
+		logger.InfoContext(ctx, "request completed", "level", "info", "trace_id", traceID, "request_id", requestID, "user_id", trustedUserID(ctx), "method", info.FullMethod, "error", err)
+		return resp, err
+	}
+}
+func requestIDs(ctx context.Context) (string, string) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	requestID, traceID := first(md, "x-request-id"), first(md, "x-trace-id")
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	if traceID == "" {
+		traceID = uuid.NewString()
+	}
+	return requestID, traceID
+}
+func first(md metadata.MD, key string) string {
+	if values := md.Get(key); len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+func trustedUserID(ctx context.Context) string {
+	if v, ok := ctx.Value(authenticatedUserIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+type authenticatedUserIDKey struct{}

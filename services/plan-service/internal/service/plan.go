@@ -39,6 +39,12 @@ type Page[T any] struct {
 	Page, PageSize int
 	Total          int64
 }
+type dayLister interface {
+	ListDays(context.Context, string, string, int, int) ([]model.WorkoutDay, int64, error)
+}
+type itemLister interface {
+	ListItems(context.Context, string, string, int, int) ([]model.WorkoutItem, int64, error)
+}
 type Service struct{ repo PlanRepository }
 
 func New(r PlanRepository) *Service { return &Service{repo: r} }
@@ -109,10 +115,17 @@ func (s *Service) AddWorkoutDay(c context.Context, u, pid string, in WorkoutDayI
 	if in.Date.IsZero() {
 		return model.WorkoutDay{}, apperror.InvalidArgument("date is required")
 	}
-	d := model.WorkoutDay{ID: uuid.NewString(), UserID: u, PlanID: pid, Date: in.Date.UTC()}
+	now := time.Now().UTC()
+	d := model.WorkoutDay{ID: uuid.NewString(), UserID: u, PlanID: pid, Date: in.Date.UTC(), CreatedAt: now, UpdatedAt: now}
 	return d, s.repo.CreateDay(c, &d)
 }
 func (s *Service) UpdateWorkoutDay(c context.Context, u, pid, did string, in WorkoutDayInput) (model.WorkoutDay, error) {
+	if did == "" {
+		return model.WorkoutDay{}, apperror.InvalidArgument("workout_day_id is required")
+	}
+	if in.Date.IsZero() {
+		return model.WorkoutDay{}, apperror.InvalidArgument("date is required")
+	}
 	d, e := s.repo.GetDay(c, u, pid, did)
 	if e != nil {
 		return d, e
@@ -122,13 +135,39 @@ func (s *Service) UpdateWorkoutDay(c context.Context, u, pid, did string, in Wor
 	return d, s.repo.UpdateDay(c, &d)
 }
 func (s *Service) DeleteWorkoutDay(c context.Context, u, pid, did string) error {
+	if e := validateUser(u); e != nil {
+		return e
+	}
+	if pid == "" || did == "" {
+		return apperror.InvalidArgument("plan_id and workout_day_id are required")
+	}
+	if _, e := s.repo.GetDay(c, u, pid, did); e != nil {
+		return e
+	}
 	return s.repo.DeleteDay(c, u, pid, did)
+}
+func (s *Service) ListWorkoutDays(c context.Context, u, pid string, page, size int) (Page[model.WorkoutDay], error) {
+	if e := validateUser(u); e != nil {
+		return Page[model.WorkoutDay]{}, e
+	}
+	if pid == "" {
+		return Page[model.WorkoutDay]{}, apperror.InvalidArgument("plan_id is required")
+	}
+	if page < 1 || size < 1 || size > 100 {
+		return Page[model.WorkoutDay]{}, apperror.InvalidArgument("invalid pagination")
+	}
+	l, ok := s.repo.(dayLister)
+	if !ok {
+		return Page[model.WorkoutDay]{}, apperror.Internal("workout day listing unavailable")
+	}
+	items, total, e := l.ListDays(c, u, pid, page, size)
+	return Page[model.WorkoutDay]{Items: items, Page: page, PageSize: size, Total: total}, e
 }
 func validItem(in WorkoutItemInput) error {
 	if in.Name == "" {
 		return apperror.InvalidArgument("name is required")
 	}
-	if in.Sets < 0 || in.Repetitions < 0 || in.DurationSeconds < 0 || in.Weight < 0 {
+	if in.Sets < 0 || in.Sets > 1000 || in.Repetitions < 0 || in.Repetitions > 1000 || in.DurationSeconds < 0 || in.DurationSeconds > 86400 || in.Weight < 0 || in.Weight > 1000 {
 		return apperror.InvalidArgument("workout parameters must be non-negative")
 	}
 	if in.Sets == 0 && in.Repetitions == 0 && in.DurationSeconds == 0 {
@@ -140,7 +179,8 @@ func (s *Service) AddWorkoutItem(c context.Context, u, did string, in WorkoutIte
 	if e := validItem(in); e != nil {
 		return model.WorkoutItem{}, e
 	}
-	i := model.WorkoutItem{ID: uuid.NewString(), UserID: u, WorkoutDayID: did, Name: in.Name, Sets: in.Sets, Repetitions: in.Repetitions, Weight: in.Weight, DurationSeconds: in.DurationSeconds}
+	now := time.Now().UTC()
+	i := model.WorkoutItem{ID: uuid.NewString(), UserID: u, WorkoutDayID: did, Name: in.Name, Sets: in.Sets, Repetitions: in.Repetitions, Weight: in.Weight, DurationSeconds: in.DurationSeconds, CreatedAt: now, UpdatedAt: now}
 	if _, e := s.repo.GetDay(c, u, "", did); e != nil {
 		return i, e
 	}
@@ -159,8 +199,53 @@ func (s *Service) UpdateWorkoutItem(c context.Context, u, did, iid string, in Wo
 	i.Repetitions = in.Repetitions
 	i.Weight = in.Weight
 	i.DurationSeconds = in.DurationSeconds
+	i.UpdatedAt = time.Now().UTC()
 	return i, s.repo.UpdateItem(c, &i)
 }
 func (s *Service) DeleteWorkoutItem(c context.Context, u, did, iid string) error {
+	if e := validateUser(u); e != nil {
+		return e
+	}
+	if did == "" || iid == "" {
+		return apperror.InvalidArgument("workout_day_id and workout_item_id are required")
+	}
+	if _, e := s.repo.GetItem(c, u, did, iid); e != nil {
+		return e
+	}
 	return s.repo.DeleteItem(c, u, did, iid)
+}
+func (s *Service) GetWorkoutDay(c context.Context, u, pid, did string) (model.WorkoutDay, error) {
+	if e := validateUser(u); e != nil {
+		return model.WorkoutDay{}, e
+	}
+	if pid == "" || did == "" {
+		return model.WorkoutDay{}, apperror.InvalidArgument("plan_id and workout_day_id are required")
+	}
+	return s.repo.GetDay(c, u, pid, did)
+}
+func (s *Service) GetWorkoutItem(c context.Context, u, did, iid string) (model.WorkoutItem, error) {
+	if e := validateUser(u); e != nil {
+		return model.WorkoutItem{}, e
+	}
+	if did == "" || iid == "" {
+		return model.WorkoutItem{}, apperror.InvalidArgument("workout_day_id and workout_item_id are required")
+	}
+	return s.repo.GetItem(c, u, did, iid)
+}
+func (s *Service) ListWorkoutItems(c context.Context, u, did string, page, size int) (Page[model.WorkoutItem], error) {
+	if e := validateUser(u); e != nil {
+		return Page[model.WorkoutItem]{}, e
+	}
+	if did == "" {
+		return Page[model.WorkoutItem]{}, apperror.InvalidArgument("workout_day_id is required")
+	}
+	if page < 1 || size < 1 || size > 100 {
+		return Page[model.WorkoutItem]{}, apperror.InvalidArgument("invalid pagination")
+	}
+	l, ok := s.repo.(itemLister)
+	if !ok {
+		return Page[model.WorkoutItem]{}, apperror.Internal("workout item listing unavailable")
+	}
+	items, total, e := l.ListItems(c, u, did, page, size)
+	return Page[model.WorkoutItem]{Items: items, Page: page, PageSize: size, Total: total}, e
 }

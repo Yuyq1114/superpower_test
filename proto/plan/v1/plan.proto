@@ -31,7 +31,17 @@ service PlanService {
   rpc AddWorkoutDay(AddWorkoutDayRequest) returns (WorkoutDayResponse);
   rpc UpdateWorkoutDay(UpdateWorkoutDayRequest) returns (WorkoutDayResponse);
   rpc DeleteWorkoutDay(DeleteWorkoutDayRequest) returns (Empty);
+  rpc GetWorkoutDay(GetWorkoutDayRequest) returns (WorkoutDayResponse);
+  rpc ListWorkoutDays(ListWorkoutDaysRequest) returns (ListWorkoutDaysResponse);
   rpc AddWorkoutItem(AddWorkoutItemRequest) returns (WorkoutItemResponse);
   rpc UpdateWorkoutItem(UpdateWorkoutItemRequest) returns (WorkoutItemResponse);
   rpc DeleteWorkoutItem(DeleteWorkoutItemRequest) returns (Empty);
+  rpc GetWorkoutItem(GetWorkoutItemRequest) returns (WorkoutItemResponse);
+  rpc ListWorkoutItems(ListWorkoutItemsRequest) returns (ListWorkoutItemsResponse);
 }
+message GetWorkoutDayRequest { string user_id = 1; string plan_id = 2; string workout_day_id = 3; }
+message ListWorkoutDaysRequest { string user_id = 1; string plan_id = 2; PageRequest page = 3; }
+message ListWorkoutDaysResponse { repeated WorkoutDay workout_days = 1; PageInfo page = 2; }
+message GetWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; string workout_item_id = 3; }
+message ListWorkoutItemsRequest { string user_id = 1; string workout_day_id = 2; PageRequest page = 3; }
+message ListWorkoutItemsResponse { repeated WorkoutItem items = 1; PageInfo page = 2; }

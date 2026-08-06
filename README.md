@@ -18,3 +18,7 @@ PostgreSQL 初始化脚本创建五个服务角色及各自 schema，并设置 U
 ## auth-service 依赖
 
 auth-service 仅依赖 PostgreSQL。启动时会执行 uth_schema 迁移；/readyz 只检查 PostgreSQL。Redis 是其他服务的基础设施，不是 auth-service 的运行依赖。
+
+## plan-service dependencies
+
+plan-service depends only on PostgreSQL and does not use Redis. Its `/readyz` endpoint checks PostgreSQL only; `/healthz` reports process liveness.

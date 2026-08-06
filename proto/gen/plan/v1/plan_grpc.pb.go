@@ -27,9 +27,13 @@ const (
 	PlanService_AddWorkoutDay_FullMethodName     = "/plan.v1.PlanService/AddWorkoutDay"
 	PlanService_UpdateWorkoutDay_FullMethodName  = "/plan.v1.PlanService/UpdateWorkoutDay"
 	PlanService_DeleteWorkoutDay_FullMethodName  = "/plan.v1.PlanService/DeleteWorkoutDay"
+	PlanService_GetWorkoutDay_FullMethodName     = "/plan.v1.PlanService/GetWorkoutDay"
+	PlanService_ListWorkoutDays_FullMethodName   = "/plan.v1.PlanService/ListWorkoutDays"
 	PlanService_AddWorkoutItem_FullMethodName    = "/plan.v1.PlanService/AddWorkoutItem"
 	PlanService_UpdateWorkoutItem_FullMethodName = "/plan.v1.PlanService/UpdateWorkoutItem"
 	PlanService_DeleteWorkoutItem_FullMethodName = "/plan.v1.PlanService/DeleteWorkoutItem"
+	PlanService_GetWorkoutItem_FullMethodName    = "/plan.v1.PlanService/GetWorkoutItem"
+	PlanService_ListWorkoutItems_FullMethodName  = "/plan.v1.PlanService/ListWorkoutItems"
 )
 
 // PlanServiceClient is the client API for PlanService service.
@@ -44,9 +48,13 @@ type PlanServiceClient interface {
 	AddWorkoutDay(ctx context.Context, in *AddWorkoutDayRequest, opts ...grpc.CallOption) (*WorkoutDayResponse, error)
 	UpdateWorkoutDay(ctx context.Context, in *UpdateWorkoutDayRequest, opts ...grpc.CallOption) (*WorkoutDayResponse, error)
 	DeleteWorkoutDay(ctx context.Context, in *DeleteWorkoutDayRequest, opts ...grpc.CallOption) (*Empty, error)
+	GetWorkoutDay(ctx context.Context, in *GetWorkoutDayRequest, opts ...grpc.CallOption) (*WorkoutDayResponse, error)
+	ListWorkoutDays(ctx context.Context, in *ListWorkoutDaysRequest, opts ...grpc.CallOption) (*ListWorkoutDaysResponse, error)
 	AddWorkoutItem(ctx context.Context, in *AddWorkoutItemRequest, opts ...grpc.CallOption) (*WorkoutItemResponse, error)
 	UpdateWorkoutItem(ctx context.Context, in *UpdateWorkoutItemRequest, opts ...grpc.CallOption) (*WorkoutItemResponse, error)
 	DeleteWorkoutItem(ctx context.Context, in *DeleteWorkoutItemRequest, opts ...grpc.CallOption) (*Empty, error)
+	GetWorkoutItem(ctx context.Context, in *GetWorkoutItemRequest, opts ...grpc.CallOption) (*WorkoutItemResponse, error)
+	ListWorkoutItems(ctx context.Context, in *ListWorkoutItemsRequest, opts ...grpc.CallOption) (*ListWorkoutItemsResponse, error)
 }
 
 type planServiceClient struct {
@@ -137,6 +145,26 @@ func (c *planServiceClient) DeleteWorkoutDay(ctx context.Context, in *DeleteWork
 	return out, nil
 }
 
+func (c *planServiceClient) GetWorkoutDay(ctx context.Context, in *GetWorkoutDayRequest, opts ...grpc.CallOption) (*WorkoutDayResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WorkoutDayResponse)
+	err := c.cc.Invoke(ctx, PlanService_GetWorkoutDay_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *planServiceClient) ListWorkoutDays(ctx context.Context, in *ListWorkoutDaysRequest, opts ...grpc.CallOption) (*ListWorkoutDaysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListWorkoutDaysResponse)
+	err := c.cc.Invoke(ctx, PlanService_ListWorkoutDays_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *planServiceClient) AddWorkoutItem(ctx context.Context, in *AddWorkoutItemRequest, opts ...grpc.CallOption) (*WorkoutItemResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WorkoutItemResponse)
@@ -167,6 +195,26 @@ func (c *planServiceClient) DeleteWorkoutItem(ctx context.Context, in *DeleteWor
 	return out, nil
 }
 
+func (c *planServiceClient) GetWorkoutItem(ctx context.Context, in *GetWorkoutItemRequest, opts ...grpc.CallOption) (*WorkoutItemResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WorkoutItemResponse)
+	err := c.cc.Invoke(ctx, PlanService_GetWorkoutItem_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *planServiceClient) ListWorkoutItems(ctx context.Context, in *ListWorkoutItemsRequest, opts ...grpc.CallOption) (*ListWorkoutItemsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListWorkoutItemsResponse)
+	err := c.cc.Invoke(ctx, PlanService_ListWorkoutItems_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PlanServiceServer is the server API for PlanService service.
 // All implementations must embed UnimplementedPlanServiceServer
 // for forward compatibility
@@ -179,9 +227,13 @@ type PlanServiceServer interface {
 	AddWorkoutDay(context.Context, *AddWorkoutDayRequest) (*WorkoutDayResponse, error)
 	UpdateWorkoutDay(context.Context, *UpdateWorkoutDayRequest) (*WorkoutDayResponse, error)
 	DeleteWorkoutDay(context.Context, *DeleteWorkoutDayRequest) (*Empty, error)
+	GetWorkoutDay(context.Context, *GetWorkoutDayRequest) (*WorkoutDayResponse, error)
+	ListWorkoutDays(context.Context, *ListWorkoutDaysRequest) (*ListWorkoutDaysResponse, error)
 	AddWorkoutItem(context.Context, *AddWorkoutItemRequest) (*WorkoutItemResponse, error)
 	UpdateWorkoutItem(context.Context, *UpdateWorkoutItemRequest) (*WorkoutItemResponse, error)
 	DeleteWorkoutItem(context.Context, *DeleteWorkoutItemRequest) (*Empty, error)
+	GetWorkoutItem(context.Context, *GetWorkoutItemRequest) (*WorkoutItemResponse, error)
+	ListWorkoutItems(context.Context, *ListWorkoutItemsRequest) (*ListWorkoutItemsResponse, error)
 	mustEmbedUnimplementedPlanServiceServer()
 }
 
@@ -213,6 +265,12 @@ func (UnimplementedPlanServiceServer) UpdateWorkoutDay(context.Context, *UpdateW
 func (UnimplementedPlanServiceServer) DeleteWorkoutDay(context.Context, *DeleteWorkoutDayRequest) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteWorkoutDay not implemented")
 }
+func (UnimplementedPlanServiceServer) GetWorkoutDay(context.Context, *GetWorkoutDayRequest) (*WorkoutDayResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetWorkoutDay not implemented")
+}
+func (UnimplementedPlanServiceServer) ListWorkoutDays(context.Context, *ListWorkoutDaysRequest) (*ListWorkoutDaysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListWorkoutDays not implemented")
+}
 func (UnimplementedPlanServiceServer) AddWorkoutItem(context.Context, *AddWorkoutItemRequest) (*WorkoutItemResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddWorkoutItem not implemented")
 }
@@ -221,6 +279,12 @@ func (UnimplementedPlanServiceServer) UpdateWorkoutItem(context.Context, *Update
 }
 func (UnimplementedPlanServiceServer) DeleteWorkoutItem(context.Context, *DeleteWorkoutItemRequest) (*Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteWorkoutItem not implemented")
+}
+func (UnimplementedPlanServiceServer) GetWorkoutItem(context.Context, *GetWorkoutItemRequest) (*WorkoutItemResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetWorkoutItem not implemented")
+}
+func (UnimplementedPlanServiceServer) ListWorkoutItems(context.Context, *ListWorkoutItemsRequest) (*ListWorkoutItemsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListWorkoutItems not implemented")
 }
 func (UnimplementedPlanServiceServer) mustEmbedUnimplementedPlanServiceServer() {}
 
@@ -379,6 +443,42 @@ func _PlanService_DeleteWorkoutDay_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PlanService_GetWorkoutDay_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkoutDayRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanServiceServer).GetWorkoutDay(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanService_GetWorkoutDay_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanServiceServer).GetWorkoutDay(ctx, req.(*GetWorkoutDayRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlanService_ListWorkoutDays_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListWorkoutDaysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanServiceServer).ListWorkoutDays(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanService_ListWorkoutDays_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanServiceServer).ListWorkoutDays(ctx, req.(*ListWorkoutDaysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PlanService_AddWorkoutItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AddWorkoutItemRequest)
 	if err := dec(in); err != nil {
@@ -433,6 +533,42 @@ func _PlanService_DeleteWorkoutItem_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PlanService_GetWorkoutItem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkoutItemRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanServiceServer).GetWorkoutItem(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanService_GetWorkoutItem_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanServiceServer).GetWorkoutItem(ctx, req.(*GetWorkoutItemRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlanService_ListWorkoutItems_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListWorkoutItemsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanServiceServer).ListWorkoutItems(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanService_ListWorkoutItems_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanServiceServer).ListWorkoutItems(ctx, req.(*ListWorkoutItemsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PlanService_ServiceDesc is the grpc.ServiceDesc for PlanService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -473,6 +609,14 @@ var PlanService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PlanService_DeleteWorkoutDay_Handler,
 		},
 		{
+			MethodName: "GetWorkoutDay",
+			Handler:    _PlanService_GetWorkoutDay_Handler,
+		},
+		{
+			MethodName: "ListWorkoutDays",
+			Handler:    _PlanService_ListWorkoutDays_Handler,
+		},
+		{
 			MethodName: "AddWorkoutItem",
 			Handler:    _PlanService_AddWorkoutItem_Handler,
 		},
@@ -483,6 +627,14 @@ var PlanService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteWorkoutItem",
 			Handler:    _PlanService_DeleteWorkoutItem_Handler,
+		},
+		{
+			MethodName: "GetWorkoutItem",
+			Handler:    _PlanService_GetWorkoutItem_Handler,
+		},
+		{
+			MethodName: "ListWorkoutItems",
+			Handler:    _PlanService_ListWorkoutItems_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

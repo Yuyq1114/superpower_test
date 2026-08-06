@@ -15,9 +15,11 @@ func table(s, t string) string {
 	}
 	return `"` + s + `"."` + t + `"`
 }
-func Migrate(ctx context.Context, db *gorm.DB) error {
-	q := `"` + DefaultSchema + `"`
-	for _, x := range []string{`CREATE SCHEMA IF NOT EXISTS ` + q, `CREATE TABLE IF NOT EXISTS ` + q + `.plans (id text PRIMARY KEY,user_id text NOT NULL,name text NOT NULL,status text NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_days (id text PRIMARY KEY,user_id text NOT NULL,plan_id text NOT NULL REFERENCES ` + q + `.plans(id) ON DELETE CASCADE,workout_date date NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE UNIQUE INDEX IF NOT EXISTS plan_days_unique ON ` + q + `.workout_days(plan_id,workout_date)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_items (id text PRIMARY KEY,user_id text NOT NULL,workout_day_id text NOT NULL REFERENCES ` + q + `.workout_days(id) ON DELETE CASCADE,name text NOT NULL,sets integer NOT NULL DEFAULT 0,repetitions integer NOT NULL DEFAULT 0,weight double precision NOT NULL DEFAULT 0,duration_seconds integer NOT NULL DEFAULT 0,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`} {
+func Migrate(ctx context.Context, db *gorm.DB) error { return migrateSchema(ctx, db, DefaultSchema) }
+
+func migrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
+	q := `"` + schema + `"`
+	for _, x := range []string{`CREATE SCHEMA IF NOT EXISTS ` + q, `CREATE TABLE IF NOT EXISTS ` + q + `.plans (id text PRIMARY KEY,user_id text NOT NULL,name text NOT NULL,status text NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_days (id text PRIMARY KEY,user_id text NOT NULL,plan_id text NOT NULL REFERENCES ` + q + `.plans(id) ON DELETE CASCADE,workout_date date NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_items (id text PRIMARY KEY,user_id text NOT NULL,workout_day_id text NOT NULL REFERENCES ` + q + `.workout_days(id) ON DELETE CASCADE,name text NOT NULL,sets integer NOT NULL DEFAULT 0,repetitions integer NOT NULL DEFAULT 0,weight double precision NOT NULL DEFAULT 0,duration_seconds integer NOT NULL DEFAULT 0,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE UNIQUE INDEX IF NOT EXISTS plan_days_unique ON ` + q + `.workout_days(plan_id,workout_date)`, `CREATE INDEX IF NOT EXISTS plans_user_id_idx ON ` + q + `.plans(user_id)`, `CREATE INDEX IF NOT EXISTS workout_days_user_plan_idx ON ` + q + `.workout_days(user_id,plan_id)`, `CREATE INDEX IF NOT EXISTS workout_items_user_day_idx ON ` + q + `.workout_items(user_id,workout_day_id)`} {
 		if e := db.WithContext(ctx).Exec(x).Error; e != nil {
 			return fmt.Errorf("migration: %w", e)
 		}
@@ -42,7 +44,14 @@ func (r GORM) UpdatePlan(c context.Context, p *model.Plan) error {
 	return r.DB.WithContext(c).Table(table(r.Schema, "plans")).Save(p).Error
 }
 func (r GORM) DeletePlan(c context.Context, u, id string) error {
-	return r.DB.WithContext(c).Table(table(r.Schema, "plans")).Where("user_id = ? AND id = ?", u, id).Delete(&model.Plan{}).Error
+	result := r.DB.WithContext(c).Table(table(r.Schema, "plans")).Where("user_id = ? AND id = ?", u, id).Delete(&model.Plan{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 func (r GORM) ListPlans(c context.Context, u string, page, size int) ([]model.Plan, int64, error) {
 	var p []model.Plan
@@ -57,6 +66,16 @@ func (r GORM) ListPlans(c context.Context, u string, page, size int) ([]model.Pl
 func (r GORM) CreateDay(c context.Context, d *model.WorkoutDay) error {
 	return r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Create(d).Error
 }
+func (r GORM) ListDays(c context.Context, u, pid string, page, size int) ([]model.WorkoutDay, int64, error) {
+	var out []model.WorkoutDay
+	var n int64
+	q := r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Where("user_id = ? AND plan_id = ?", u, pid)
+	if e := q.Count(&n).Error; e != nil {
+		return nil, 0, e
+	}
+	e := q.Order("workout_date ASC").Offset((page - 1) * size).Limit(size).Find(&out).Error
+	return out, n, e
+}
 func (r GORM) GetDay(c context.Context, u, pid, id string) (model.WorkoutDay, error) {
 	var d model.WorkoutDay
 	q := r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Where("user_id = ? AND id = ?", u, id)
@@ -70,10 +89,27 @@ func (r GORM) UpdateDay(c context.Context, d *model.WorkoutDay) error {
 	return r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Save(d).Error
 }
 func (r GORM) DeleteDay(c context.Context, u, pid, id string) error {
-	return r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Where("user_id = ? AND plan_id = ? AND id = ?", u, pid, id).Delete(&model.WorkoutDay{}).Error
+	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Where("user_id = ? AND plan_id = ? AND id = ?", u, pid, id).Delete(&model.WorkoutDay{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 func (r GORM) CreateItem(c context.Context, i *model.WorkoutItem) error {
 	return r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Create(i).Error
+}
+func (r GORM) ListItems(c context.Context, u, did string, page, size int) ([]model.WorkoutItem, int64, error) {
+	var out []model.WorkoutItem
+	var n int64
+	q := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Where("user_id = ? AND workout_day_id = ?", u, did)
+	if e := q.Count(&n).Error; e != nil {
+		return nil, 0, e
+	}
+	e := q.Order("created_at ASC").Offset((page - 1) * size).Limit(size).Find(&out).Error
+	return out, n, e
 }
 func (r GORM) GetItem(c context.Context, u, did, id string) (model.WorkoutItem, error) {
 	var i model.WorkoutItem
@@ -84,5 +120,12 @@ func (r GORM) UpdateItem(c context.Context, i *model.WorkoutItem) error {
 	return r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Save(i).Error
 }
 func (r GORM) DeleteItem(c context.Context, u, did, id string) error {
-	return r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Where("user_id = ? AND workout_day_id = ? AND id = ?", u, did, id).Delete(&model.WorkoutItem{}).Error
+	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Where("user_id = ? AND workout_day_id = ? AND id = ?", u, did, id).Delete(&model.WorkoutItem{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }

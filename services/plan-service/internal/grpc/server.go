@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
+	"strings"
 	"time"
 )
 
@@ -26,10 +27,21 @@ func mapErr(e error) error {
 	if errors.Is(e, gorm.ErrRecordNotFound) {
 		return status.Error(codes.NotFound, "not found")
 	}
+	if errors.Is(e, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, "deadline exceeded")
+	}
 	if errors.Is(e, context.Canceled) {
 		return status.Error(codes.Canceled, e.Error())
 	}
+	if errors.Is(e, context.Canceled) {
+		return status.Error(codes.Canceled, "canceled")
+	}
+	if strings.Contains(strings.ToLower(e.Error()), "duplicate key") || strings.Contains(e.Error(), "23505") {
+		return status.Error(codes.AlreadyExists, "resource already exists")
+	}
 	switch apperror.CodeOf(e) {
+	case apperror.CodeUnauthenticated:
+		return status.Error(codes.Unauthenticated, e.Error())
 	case apperror.CodeInvalidArgument:
 		return status.Error(codes.InvalidArgument, e.Error())
 	case apperror.CodeNotFound:
@@ -133,7 +145,58 @@ func (s *Server) DeleteWorkoutItem(c context.Context, r *planv1.DeleteWorkoutIte
 	}
 	return &planv1.Empty{}, nil
 }
-func parseDate(v string) time.Time { d, _ := time.Parse("2006-01-02", v); return d }
+
+func pageRequest(p *planv1.PageRequest) (int, int) {
+	if p == nil {
+		return 1, 20
+	}
+	return int(p.Page), int(p.PageSize)
+}
+func (s *Server) GetWorkoutDay(c context.Context, r *planv1.GetWorkoutDayRequest) (*planv1.WorkoutDayResponse, error) {
+	d, e := s.Svc.GetWorkoutDay(c, r.UserId, r.PlanId, r.WorkoutDayId)
+	if e != nil {
+		return nil, mapErr(e)
+	}
+	return &planv1.WorkoutDayResponse{WorkoutDay: day(d)}, nil
+}
+func (s *Server) ListWorkoutDays(c context.Context, r *planv1.ListWorkoutDaysRequest) (*planv1.ListWorkoutDaysResponse, error) {
+	p, z := pageRequest(r.Page)
+	out, e := s.Svc.ListWorkoutDays(c, r.UserId, r.PlanId, p, z)
+	if e != nil {
+		return nil, mapErr(e)
+	}
+	days := make([]*planv1.WorkoutDay, len(out.Items))
+	for i := range out.Items {
+		days[i] = day(out.Items[i])
+	}
+	return &planv1.ListWorkoutDaysResponse{WorkoutDays: days, Page: &planv1.PageInfo{Page: int32(out.Page), PageSize: int32(out.PageSize), Total: out.Total}}, nil
+}
+func (s *Server) GetWorkoutItem(c context.Context, r *planv1.GetWorkoutItemRequest) (*planv1.WorkoutItemResponse, error) {
+	i, e := s.Svc.GetWorkoutItem(c, r.UserId, r.WorkoutDayId, r.WorkoutItemId)
+	if e != nil {
+		return nil, mapErr(e)
+	}
+	return &planv1.WorkoutItemResponse{Item: item(i)}, nil
+}
+func (s *Server) ListWorkoutItems(c context.Context, r *planv1.ListWorkoutItemsRequest) (*planv1.ListWorkoutItemsResponse, error) {
+	p, z := pageRequest(r.Page)
+	out, e := s.Svc.ListWorkoutItems(c, r.UserId, r.WorkoutDayId, p, z)
+	if e != nil {
+		return nil, mapErr(e)
+	}
+	items := make([]*planv1.WorkoutItem, len(out.Items))
+	for i := range out.Items {
+		items[i] = item(out.Items[i])
+	}
+	return &planv1.ListWorkoutItemsResponse{Items: items, Page: &planv1.PageInfo{Page: int32(out.Page), PageSize: int32(out.PageSize), Total: out.Total}}, nil
+}
+func parseDate(v string) time.Time {
+	if strings.TrimSpace(v) == "" {
+		return time.Time{}
+	}
+	d, _ := time.Parse("2006-01-02", v)
+	return d
+}
 func toInput(i *planv1.WorkoutItem) service.WorkoutItemInput {
 	if i == nil {
 		return service.WorkoutItemInput{}
