@@ -38,6 +38,16 @@ func (p *Publisher) PublishPending(ctx context.Context, n int) error {
 			if p.Retried != nil {
 				p.Retried()
 			}
+			if releaseErr := p.Repo.ReleaseLease(ctx, x.EventID, x.LeaseID); releaseErr != nil {
+				if p.Failed != nil {
+					p.Failed()
+				}
+				if p.Logger != nil {
+					p.Logger.ErrorContext(ctx, "mark published failed; lease release failed", "event_id", x.EventID, "error", releaseErr)
+				}
+			} else if p.Logger != nil {
+				p.Logger.WarnContext(ctx, "mark published failed; lease released for retry", "event_id", x.EventID, "error", e)
+			}
 			return e
 		}
 		if p.Published != nil {

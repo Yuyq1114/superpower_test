@@ -12,6 +12,8 @@ import (
 type repo struct {
 	events    []model.OutboxEvent
 	published int
+	markErr   error
+	released  int
 }
 
 func (r *repo) CreateWithEvent(context.Context, *model.Checkin, *model.OutboxEvent) error { return nil }
@@ -29,9 +31,9 @@ func (r *repo) PendingEvents(context.Context, int) ([]model.OutboxEvent, error) 
 }
 func (r *repo) MarkPublished(context.Context, string, string, time.Time) error {
 	r.published++
-	return nil
+	return r.markErr
 }
-func (r *repo) ReleaseLease(context.Context, string, string) error { return nil }
+func (r *repo) ReleaseLease(context.Context, string, string) error { r.released++; return nil }
 func TestPublisher(t *testing.T) {
 	m := miniredis.RunT(t)
 	c := redis.NewClient(&redis.Options{Addr: m.Addr()})
@@ -41,5 +43,17 @@ func TestPublisher(t *testing.T) {
 	}
 	if r.published != 1 {
 		t.Fatal(r.published)
+	}
+}
+
+func TestMarkFailureReleasesLease(t *testing.T) {
+	m := miniredis.RunT(t)
+	c := redis.NewClient(&redis.Options{Addr: m.Addr()})
+	r := &repo{markErr: context.DeadlineExceeded, events: []model.OutboxEvent{{EventID: "e2", EventType: "WorkoutCompleted", LeaseID: "l", CompletedAt: time.Now(), OccurredAt: time.Now()}}}
+	if err := (&Publisher{Repo: r, Redis: c}).PublishPending(context.Background(), 1); err == nil {
+		t.Fatal("expected mark failure")
+	}
+	if r.released != 1 {
+		t.Fatalf("released=%d", r.released)
 	}
 }

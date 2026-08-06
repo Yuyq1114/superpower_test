@@ -1,4 +1,4 @@
-﻿syntax = "proto3";
+syntax = "proto3";
 package checkin.v1;
 option go_package = "github.com/example/fitness-checkin/proto/gen/checkin/v1;checkinv1";
 message PageRequest { int32 page = 1; int32 page_size = 2; }

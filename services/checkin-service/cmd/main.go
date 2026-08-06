@@ -13,6 +13,7 @@ import (
 	checkingrpc "github.com/example/fitness-checkin/services/checkin-service/internal/grpc"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/repository"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/service"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
@@ -134,25 +135,32 @@ func deadlineInterceptor(d time.Duration) grpc.UnaryServerInterceptor {
 		return h(c, req)
 	}
 }
+
+type auditIdentity struct{ UserID, TraceID, RequestID string }
+type auditIdentityKey struct{}
+
+func withAuditIdentity(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, auditIdentityKey{}, auditIdentity{UserID: userID, TraceID: uuid.NewString(), RequestID: uuid.NewString()})
+}
+func trustedAuditIdentity(ctx context.Context) auditIdentity {
+	if v, ok := ctx.Value(auditIdentityKey{}).(auditIdentity); ok {
+		return v
+	}
+	return auditIdentity{TraceID: uuid.NewString(), RequestID: uuid.NewString()}
+}
 func metricsInterceptor(m *observability.Metrics, logger *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 		start := time.Now()
+		identity := trustedAuditIdentity(ctx)
+		ctx = context.WithValue(ctx, auditIdentityKey{}, identity)
 		m.RequestsTotal.WithLabelValues("checkin-service", info.FullMethod).Inc()
 		out, err := h(ctx, req)
 		m.DurationSeconds.WithLabelValues("checkin-service", info.FullMethod).Observe(time.Since(start).Seconds())
 		if err != nil {
 			m.ErrorsTotal.WithLabelValues("checkin-service", info.FullMethod).Inc()
 		}
-		logger.InfoContext(ctx, "request completed", "level", "info", "trace_id", "", "request_id", "", "user_id", requestUser(req), "method", info.FullMethod, "error", err)
+		logger.InfoContext(ctx, "request completed", "level", "info", "trace_id", identity.TraceID, "request_id", identity.RequestID, "user_id", identity.UserID, "method", info.FullMethod, "error", err)
 		return out, err
-	}
-}
-func requestUser(req any) string {
-	switch r := req.(type) {
-	case interface{ GetUserId() string }:
-		return r.GetUserId()
-	default:
-		return ""
 	}
 }
 func pingDB(ctx context.Context, db interface{ PingContext(context.Context) error }) bool {
