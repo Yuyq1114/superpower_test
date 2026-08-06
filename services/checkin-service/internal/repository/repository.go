@@ -2,8 +2,11 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/example/fitness-checkin/pkg/apperror"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/model"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"time"
@@ -59,7 +62,15 @@ func (r GORM) CreateWithEvent(ctx context.Context, c *model.Checkin, e *model.Ou
 			return x.Error
 		}
 		if x.RowsAffected == 0 {
-			return tx.Table(table(r.Schema, "checkins")).Where("user_id=? AND idempotency_key=?", c.UserID, c.IdempotencyKey).First(c).Error
+			var existing model.Checkin
+			if err := tx.Table(table(r.Schema, "checkins")).Where("user_id=? AND idempotency_key=?", c.UserID, c.IdempotencyKey).First(&existing).Error; err != nil {
+				return err
+			}
+			if existing.RequestFingerprint != c.RequestFingerprint {
+				return apperror.Conflict("idempotency key reused with different request")
+			}
+			*c = existing
+			return nil
 		}
 		return tx.Table(table(r.Schema, "outbox_events")).Create(e).Error
 	})
@@ -96,8 +107,12 @@ func (r GORM) PendingEvents(ctx context.Context, n int) ([]model.OutboxEvent, er
 		for i := range out {
 			ids[i] = out[i].EventID
 		}
-		if err := tx.Table(table(r.Schema, "outbox_events")).Where("event_id IN ?", ids).Updates(map[string]any{"lease_id": id, "lease_until": until}).Error; err != nil {
-			return err
+		result := tx.Table(table(r.Schema, "outbox_events")).Where("event_id IN ? AND published_at IS NULL AND (lease_until IS NULL OR lease_until < ?)", ids, lease).Updates(map[string]any{"lease_id": id, "lease_until": until})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(ids)) {
+			return apperror.Conflict("outbox lease claim lost")
 		}
 		for i := range out {
 			out[i].LeaseID = id
@@ -108,8 +123,30 @@ func (r GORM) PendingEvents(ctx context.Context, n int) ([]model.OutboxEvent, er
 	return out, err
 }
 func (r GORM) MarkPublished(ctx context.Context, id, lease string, at time.Time) error {
-	return r.DB.WithContext(ctx).Table(table(r.Schema, "outbox_events")).Where("event_id=? AND lease_id=? AND published_at IS NULL", id, lease).Updates(map[string]any{"published_at": at, "lease_id": "", "lease_until": nil}).Error
+	result := r.DB.WithContext(ctx).Table(table(r.Schema, "outbox_events")).Where("event_id=? AND lease_id=? AND published_at IS NULL", id, lease).Updates(map[string]any{"published_at": at, "lease_id": "", "lease_until": nil})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return apperror.Conflict("outbox mark published lost")
+	}
+	return nil
 }
 func (r GORM) ReleaseLease(ctx context.Context, id, lease string) error {
-	return r.DB.WithContext(ctx).Table(table(r.Schema, "outbox_events")).Where("event_id=? AND lease_id=? AND published_at IS NULL", id, lease).Updates(map[string]any{"lease_id": "", "lease_until": nil}).Error
+	result := r.DB.WithContext(ctx).Table(table(r.Schema, "outbox_events")).Where("event_id=? AND lease_id=? AND published_at IS NULL", id, lease).Updates(map[string]any{"lease_id": "", "lease_until": nil})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return apperror.Conflict("outbox lease release lost")
+	}
+	return nil
+}
+
+func ConstraintError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return apperror.Conflict("check-in conflicts with an existing record")
+	}
+	return err
 }

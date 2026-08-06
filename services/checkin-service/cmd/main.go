@@ -13,7 +13,9 @@ import (
 	checkingrpc "github.com/example/fitness-checkin/services/checkin-service/internal/grpc"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/repository"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/service"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"log/slog"
@@ -70,9 +72,13 @@ func main() {
 	defer pc.Close()
 	reg := observability.NewRegistry()
 	m := observability.NewMetrics(reg)
-	gs := grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20))
+	published := prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_outbox_published_total", Help: "Published outbox events."})
+	failed := prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_outbox_failed_total", Help: "Failed outbox publishes."})
+	retried := prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_outbox_retried_total", Help: "Retried outbox events."})
+	reg.MustRegister(published, failed, retried)
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(deadlineInterceptor(5*time.Second), metricsInterceptor(m, logger)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20))
 	checkinv1.RegisterCheckinServiceServer(gs, checkingrpc.NewServer(service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema}, planChecker{client: planv1.NewPlanServiceClient(pc)})))
-	pub := &events.Publisher{Repo: repository.GORM{DB: db, Schema: repository.DefaultSchema}, Redis: red}
+	pub := &events.Publisher{Logger: logger, Published: published.Inc, Failed: failed.Inc, Retried: retried.Inc, Repo: repository.GORM{DB: db, Schema: repository.DefaultSchema}, Redis: red}
 	go func() {
 		t := time.NewTicker(2 * time.Second)
 		defer t.Stop()
@@ -97,7 +103,7 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		sql, x := db.DB()
-		if x != nil || sql.PingContext(r.Context()) != nil || red.Ping(r.Context()).Err() != nil {
+		if x != nil || !pingDB(r.Context(), sql) || !pingRedis(r.Context(), red) {
 			http.Error(w, "not ready", 503)
 			return
 		}
@@ -119,4 +125,45 @@ func main() {
 	gs.GracefulStop()
 	_ = lis.Close()
 	_ = m
+}
+
+func deadlineInterceptor(d time.Duration) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		c, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return h(c, req)
+	}
+}
+func metricsInterceptor(m *observability.Metrics, logger *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		start := time.Now()
+		m.RequestsTotal.WithLabelValues("checkin-service", info.FullMethod).Inc()
+		out, err := h(ctx, req)
+		m.DurationSeconds.WithLabelValues("checkin-service", info.FullMethod).Observe(time.Since(start).Seconds())
+		if err != nil {
+			m.ErrorsTotal.WithLabelValues("checkin-service", info.FullMethod).Inc()
+		}
+		logger.InfoContext(ctx, "request completed", "level", "info", "trace_id", "", "request_id", "", "user_id", requestUser(req), "method", info.FullMethod, "error", err)
+		return out, err
+	}
+}
+func requestUser(req any) string {
+	switch r := req.(type) {
+	case interface{ GetUserId() string }:
+		return r.GetUserId()
+	default:
+		return ""
+	}
+}
+func pingDB(ctx context.Context, db interface{ PingContext(context.Context) error }) bool {
+	c, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	return db.PingContext(c) == nil
+}
+func pingRedis(ctx context.Context, r interface {
+	Ping(context.Context) *redis.StatusCmd
+}) bool {
+	c, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	return r.Ping(c).Err() == nil
 }

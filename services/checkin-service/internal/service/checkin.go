@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"github.com/example/fitness-checkin/pkg/apperror"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/model"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/repository"
@@ -26,6 +29,10 @@ type Service struct {
 
 func New(r repository.Repository, c WorkoutItemChecker) *Service {
 	return &Service{repo: r, checker: c}
+}
+func fingerprint(item string, date time.Time, note string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s", item, date.Format("2006-01-02"), note)))
+	return hex.EncodeToString(sum[:])
 }
 func valid(n, v string) error {
 	if strings.TrimSpace(v) == "" {
@@ -56,7 +63,7 @@ func (s *Service) Complete(ctx context.Context, u, i string, d time.Time, note, 
 		}
 	}
 	now := time.Now().UTC()
-	c := model.Checkin{ID: uuid.NewString(), UserID: u, WorkoutItemID: i, IdempotencyKey: key, Date: d, Note: note, CompletedAt: now, CreatedAt: now}
+	c := model.Checkin{ID: uuid.NewString(), UserID: u, WorkoutItemID: i, IdempotencyKey: key, RequestFingerprint: fingerprint(i, d, note), Date: d, Note: note, CompletedAt: now, CreatedAt: now}
 	ev := model.OutboxEvent{EventID: uuid.NewString(), EventType: "WorkoutCompleted", UserID: u, CheckinID: c.ID, CompletedAt: now, OccurredAt: now}
 	if e := s.repo.CreateWithEvent(ctx, &c, &ev); e != nil {
 		return model.Checkin{}, e
@@ -78,15 +85,11 @@ func (s *Service) ListHistory(ctx context.Context, u string, from, to time.Time,
 		return Page[model.Checkin]{}, e
 	}
 	result := Page[model.Checkin]{Items: x, Page: p, PageSize: z, Total: n}
-	if l, ok := s.repo.(interface {
-		ListDates(context.Context, string, time.Time, time.Time) ([]time.Time, error)
-	}); ok {
-		dates, e := l.ListDates(ctx, u, from.UTC(), to.UTC())
-		if e != nil {
-			return Page[model.Checkin]{}, e
-		}
-		result.Streak = CurrentStreak(dates, time.Now().UTC())
+	dates, e := s.repo.ListDates(ctx, u, from.UTC(), to.UTC())
+	if e != nil {
+		return Page[model.Checkin]{}, e
 	}
+	result.Streak = CurrentStreak(dates, time.Now().UTC())
 	return result, nil
 }
 func CurrentStreak(ds []time.Time, now time.Time) int {
