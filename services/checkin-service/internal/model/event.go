@@ -10,4 +10,6 @@ type OutboxEvent struct {
 	CompletedAt time.Time  `gorm:"column:completed_at"`
 	OccurredAt  time.Time  `gorm:"column:occurred_at"`
 	PublishedAt *time.Time `gorm:"column:published_at"`
+	LeaseID     string     `gorm:"column:lease_id"`
+	LeaseUntil  *time.Time `gorm:"column:lease_until"`
 }

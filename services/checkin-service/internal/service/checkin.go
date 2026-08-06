@@ -17,6 +17,7 @@ type Page[T any] struct {
 	Items          []T
 	Page, PageSize int
 	Total          int64
+	Streak         int
 }
 type Service struct {
 	repo    repository.Repository
@@ -32,11 +33,14 @@ func valid(n, v string) error {
 	}
 	return nil
 }
-func (s *Service) Complete(ctx context.Context, u, i string, d time.Time, note string) (model.Checkin, error) {
+func (s *Service) Complete(ctx context.Context, u, i string, d time.Time, note, key string) (model.Checkin, error) {
 	if e := valid("user_id", u); e != nil {
 		return model.Checkin{}, e
 	}
 	if e := valid("workout_item_id", i); e != nil {
+		return model.Checkin{}, e
+	}
+	if e := valid("idempotency_key", key); e != nil {
 		return model.Checkin{}, e
 	}
 	if d.IsZero() {
@@ -45,12 +49,14 @@ func (s *Service) Complete(ctx context.Context, u, i string, d time.Time, note s
 	d = d.UTC()
 	d = time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
 	if s.checker != nil {
-		if e := s.checker.CheckWorkoutItem(ctx, u, i); e != nil {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if e := s.checker.CheckWorkoutItem(checkCtx, u, i); e != nil {
 			return model.Checkin{}, e
 		}
 	}
 	now := time.Now().UTC()
-	c := model.Checkin{ID: uuid.NewString(), UserID: u, WorkoutItemID: i, Date: d, Note: note, CompletedAt: now, CreatedAt: now}
+	c := model.Checkin{ID: uuid.NewString(), UserID: u, WorkoutItemID: i, IdempotencyKey: key, Date: d, Note: note, CompletedAt: now, CreatedAt: now}
 	ev := model.OutboxEvent{EventID: uuid.NewString(), EventType: "WorkoutCompleted", UserID: u, CheckinID: c.ID, CompletedAt: now, OccurredAt: now}
 	if e := s.repo.CreateWithEvent(ctx, &c, &ev); e != nil {
 		return model.Checkin{}, e
@@ -68,25 +74,36 @@ func (s *Service) ListHistory(ctx context.Context, u string, from, to time.Time,
 		return Page[model.Checkin]{}, apperror.InvalidArgument("invalid pagination")
 	}
 	x, n, e := s.repo.List(ctx, u, from.UTC(), to.UTC(), p, z)
+	if e != nil {
+		return Page[model.Checkin]{}, e
+	}
 	result := Page[model.Checkin]{Items: x, Page: p, PageSize: z, Total: n}
-	return result, e
-
+	if l, ok := s.repo.(interface {
+		ListDates(context.Context, string, time.Time, time.Time) ([]time.Time, error)
+	}); ok {
+		dates, e := l.ListDates(ctx, u, from.UTC(), to.UTC())
+		if e != nil {
+			return Page[model.Checkin]{}, e
+		}
+		result.Streak = CurrentStreak(dates, time.Now().UTC())
+	}
+	return result, nil
 }
-func CalculateStreak(ds []time.Time) int {
+func CurrentStreak(ds []time.Time, now time.Time) int {
 	seen := map[string]bool{}
 	for _, d := range ds {
 		seen[d.UTC().Format("2006-01-02")] = true
 	}
-	best := 0
-	for k := range seen {
-		d, _ := time.Parse("2006-01-02", k)
-		n := 1
-		for seen[d.AddDate(0, 0, -n).Format("2006-01-02")] {
-			n++
-		}
-		if n > best {
-			best = n
-		}
+	today := now.UTC().Format("2006-01-02")
+	if !seen[today] {
+		return 0
 	}
-	return best
+	d, _ := time.Parse("2006-01-02", today)
+	n := 0
+	for seen[d.Format("2006-01-02")] {
+		n++
+		d = d.AddDate(0, 0, -1)
+	}
+	return n
 }
+func CalculateStreak(ds []time.Time) int { return CurrentStreak(ds, time.Now().UTC()) }

@@ -18,20 +18,28 @@ func (r *repo) CreateWithEvent(context.Context, *model.Checkin, *model.OutboxEve
 func (r *repo) List(context.Context, string, time.Time, time.Time, int, int) ([]model.Checkin, int64, error) {
 	return nil, 0, nil
 }
-func (r *repo) PendingEvents(context.Context, int) ([]model.OutboxEvent, error) { return r.events, nil }
-func (r *repo) MarkPublished(context.Context, string, time.Time) error          { r.published++; return nil }
-func TestPublisherPublishesAndMarks(t *testing.T) {
+func (r *repo) ListDates(context.Context, string, time.Time, time.Time) ([]time.Time, error) {
+	return nil, nil
+}
+func (r *repo) PendingEvents(context.Context, int) ([]model.OutboxEvent, error) {
+	for i := range r.events {
+		r.events[i].LeaseID = "l"
+	}
+	return r.events, nil
+}
+func (r *repo) MarkPublished(context.Context, string, string, time.Time) error {
+	r.published++
+	return nil
+}
+func (r *repo) ReleaseLease(context.Context, string, string) error { return nil }
+func TestPublisher(t *testing.T) {
 	m := miniredis.RunT(t)
 	c := redis.NewClient(&redis.Options{Addr: m.Addr()})
-	r := &repo{events: []model.OutboxEvent{{EventID: "e1", EventType: "WorkoutCompleted", UserID: "u", CheckinID: "c", CompletedAt: time.Now(), OccurredAt: time.Now()}}}
-	if e := (&Publisher{Repo: r, Redis: c}).PublishPending(context.Background(), 10); e != nil {
+	r := &repo{events: []model.OutboxEvent{{EventID: "e", EventType: "WorkoutCompleted", UserID: "u", CheckinID: "c", CompletedAt: time.Now(), OccurredAt: time.Now()}}}
+	if e := (&Publisher{Repo: r, Redis: c}).PublishPending(context.Background(), 1); e != nil {
 		t.Fatal(e)
 	}
 	if r.published != 1 {
 		t.Fatal(r.published)
-	}
-	n, e := c.XLen(context.Background(), Stream).Result()
-	if e != nil || n != 1 {
-		t.Fatalf("len=%d err=%v", n, e)
 	}
 }

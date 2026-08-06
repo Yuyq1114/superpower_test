@@ -30,6 +30,9 @@ func mapErr(e error) error {
 	if errors.Is(e, context.Canceled) {
 		return status.Error(codes.Canceled, "canceled")
 	}
+	if strings.Contains(e.Error(), "23505") || strings.Contains(strings.ToLower(e.Error()), "duplicate key") {
+		return status.Error(codes.AlreadyExists, "conflict")
+	}
 	if errors.Is(e, gorm.ErrRecordNotFound) {
 		return status.Error(codes.NotFound, "not found")
 	}
@@ -39,9 +42,11 @@ func mapErr(e error) error {
 	case apperror.CodeNotFound:
 		return status.Error(codes.NotFound, "not found")
 	case apperror.CodePermissionDenied:
-		return status.Error(codes.PermissionDenied, e.Error())
+		return status.Error(codes.PermissionDenied, "permission denied")
+	case apperror.CodeUnauthenticated:
+		return status.Error(codes.Unauthenticated, "unauthenticated")
 	case apperror.CodeConflict:
-		return status.Error(codes.AlreadyExists, e.Error())
+		return status.Error(codes.AlreadyExists, "conflict")
 	default:
 		return status.Error(codes.Internal, "internal error")
 	}
@@ -60,17 +65,23 @@ func out(c model.Checkin) *checkinv1.Checkin {
 	return &checkinv1.Checkin{Id: c.ID, UserId: c.UserID, WorkoutItemId: c.WorkoutItemID, Date: c.Date.Format("2006-01-02"), Note: c.Note, CompletedAt: c.CompletedAt.UTC().Format(time.RFC3339Nano)}
 }
 func (s *Server) Complete(ctx context.Context, r *checkinv1.CompleteRequest) (*checkinv1.CompleteResponse, error) {
+	if r == nil {
+		return nil, mapErr(apperror.InvalidArgument("request is required"))
+	}
 	d, e := parseDate(r.Date)
 	if e != nil {
 		return nil, mapErr(e)
 	}
-	c, e := s.Svc.Complete(ctx, r.UserId, r.WorkoutItemId, d, r.Note)
+	c, e := s.Svc.Complete(ctx, r.UserId, r.WorkoutItemId, d, r.Note, r.IdempotencyKey)
 	if e != nil {
 		return nil, mapErr(e)
 	}
 	return &checkinv1.CompleteResponse{Checkin: out(c)}, nil
 }
 func (s *Server) ListHistory(ctx context.Context, r *checkinv1.ListHistoryRequest) (*checkinv1.ListHistoryResponse, error) {
+	if r == nil {
+		return nil, mapErr(apperror.InvalidArgument("request is required"))
+	}
 	from, e := parseDate(r.From)
 	if e != nil {
 		return nil, mapErr(e)
@@ -91,5 +102,5 @@ func (s *Server) ListHistory(ctx context.Context, r *checkinv1.ListHistoryReques
 	for i := range x.Items {
 		items[i] = out(x.Items[i])
 	}
-	return &checkinv1.ListHistoryResponse{Checkins: items, Page: &checkinv1.PageInfo{Page: int32(x.Page), PageSize: int32(x.PageSize), Total: x.Total}}, nil
+	return &checkinv1.ListHistoryResponse{Checkins: items, Page: &checkinv1.PageInfo{Page: int32(x.Page), PageSize: int32(x.PageSize), Total: x.Total}, Streak: int32(x.Streak)}, nil
 }
