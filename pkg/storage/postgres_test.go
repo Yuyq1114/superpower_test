@@ -46,11 +46,21 @@ func TestPostgresIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sqlDB.Close()
-	target := PostgresSchemaTarget{Schema: "auth_schema", Role: "auth_service"}
-	if err := InitPostgresSchemas(context.Background(), db, target); err != nil {
-		t.Fatal(err)
+
+	if err := InitPostgresSchemas(context.Background(), db); err != nil {
+		t.Fatalf("first schema initialization: %v", err)
 	}
-	if err := InitPostgresSchemas(context.Background(), db, target); err != nil {
-		t.Fatal(err)
+	if err := InitPostgresSchemas(context.Background(), db); err != nil {
+		t.Fatalf("second schema initialization: %v", err)
+	}
+
+	for _, schema := range defaultPostgresSchemas {
+		exists, err := PostgresSchemaExists(context.Background(), db, schema)
+		if err != nil {
+			t.Fatalf("query schema %s: %v", schema, err)
+		}
+		if !exists {
+			t.Errorf("schema %s does not exist after initialization", schema)
+		}
 	}
 }
