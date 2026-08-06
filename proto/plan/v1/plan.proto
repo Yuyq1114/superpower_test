@@ -1,6 +1,6 @@
 syntax = "proto3";
 package plan.v1;
-option go_package = "github.com/example/fitness-checkin/services/plan-service/internal/gen/plan/v1;planv1";
+option go_package = "github.com/example/fitness-checkin/proto/gen/plan/v1;planv1";
 message PageRequest { int32 page = 1; int32 page_size = 2; }
 message PageInfo { int32 page = 1; int32 page_size = 2; int64 total = 3; }
 message Plan { string id = 1; string user_id = 2; string name = 3; string status = 4; string created_at = 5; string updated_at = 6; }

@@ -1,6 +1,6 @@
 syntax = "proto3";
 package checkin.v1;
-option go_package = "github.com/example/fitness-checkin/services/checkin-service/internal/gen/checkin/v1;checkinv1";
+option go_package = "github.com/example/fitness-checkin/proto/gen/checkin/v1;checkinv1";
 message PageRequest { int32 page = 1; int32 page_size = 2; }
 message PageInfo { int32 page = 1; int32 page_size = 2; int64 total = 3; }
 message Checkin { string id = 1; string user_id = 2; string workout_item_id = 3; string date = 4; string note = 5; string completed_at = 6; }

@@ -2,6 +2,7 @@ package apperror
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -23,12 +24,23 @@ func TestStableCodesAndMapping(t *testing.T) {
 			if got := CodeOf(tc.err); got != tc.want {
 				t.Fatalf("CodeOf() = %v, want %v", got, tc.want)
 			}
-			if !errors.Is(tc.err, tc.err) {
-				t.Fatal("error must support errors.Is")
-			}
 		})
 	}
 	if got := CodeOf(errors.New("unknown")); got != CodeInternal {
 		t.Fatalf("unknown code = %v, want internal", got)
+	}
+}
+
+func TestWrapKeepsCauseWithoutLeakingMessage(t *testing.T) {
+	cause := errors.New("database password=top-secret")
+	wrapped := Wrap(CodeInternal, "request failed", cause)
+	if strings.Contains(wrapped.Error(), "top-secret") {
+		t.Fatalf("public message leaked cause: %q", wrapped.Error())
+	}
+	if !errors.Is(wrapped, cause) {
+		t.Fatal("wrapped error should unwrap to cause")
+	}
+	if got := CodeOf(wrapped); got != CodeInternal {
+		t.Fatalf("CodeOf() = %v, want %v", got, CodeInternal)
 	}
 }

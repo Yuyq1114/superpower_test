@@ -1,7 +1,5 @@
 package apperror
 
-import "fmt"
-
 type Code string
 
 const (
@@ -60,6 +58,4 @@ func unwrap(err error) error {
 	}
 	return nil
 }
-func Wrap(code Code, message string, cause error) error {
-	return wrap(code, fmt.Sprintf("%s: %v", message, cause), cause)
-}
+func Wrap(code Code, message string, cause error) error { return wrap(code, message, cause) }

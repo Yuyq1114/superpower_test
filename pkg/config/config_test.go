@@ -15,11 +15,27 @@ func TestLoadUsesDefaultsAndEnvironment(t *testing.T) {
 	t.Setenv("DB_DSN", "postgres://localhost/app")
 	t.Setenv("JWT_SECRET", "test-secret")
 	t.Setenv("REDIS_ADDR", "")
+	t.Setenv("HTTP_PORT", "18080")
+	t.Setenv("GRPC_PORT", "19090")
 	cfg, err := Load("checkin-service")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Service != "checkin-service" || cfg.RedisAddr != "localhost:6379" || cfg.HTTPPort != 8080 || cfg.GRPCPort != 9090 {
+	if cfg.Service != "checkin-service" || cfg.RedisAddr != "localhost:6379" || cfg.HTTPPort != 18080 || cfg.GRPCPort != 19090 {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestLoadUsesDefaultsForInvalidPorts(t *testing.T) {
+	t.Setenv("DB_DSN", "postgres://localhost/app")
+	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("HTTP_PORT", "not-a-port")
+	t.Setenv("GRPC_PORT", "-1")
+	cfg, err := Load("auth-service")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.HTTPPort != 8080 || cfg.GRPCPort != 9090 {
+		t.Fatalf("invalid ports should default: %+v", cfg)
 	}
 }
