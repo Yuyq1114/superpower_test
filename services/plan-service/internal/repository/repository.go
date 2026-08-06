@@ -20,7 +20,7 @@ func Migrate(ctx context.Context, db *gorm.DB) error { return migrateSchema(ctx,
 
 func migrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
 	q := `"` + schema + `"`
-	for _, x := range []string{`CREATE SCHEMA IF NOT EXISTS ` + q, `CREATE TABLE IF NOT EXISTS ` + q + `.plans (id text PRIMARY KEY,user_id text NOT NULL,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,status text NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_days (id text PRIMARY KEY,user_id text NOT NULL,plan_id text NOT NULL REFERENCES ` + q + `.plans(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',workout_date date NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_items (id text PRIMARY KEY,user_id text NOT NULL,workout_day_id text NOT NULL REFERENCES ` + q + `.workout_days(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,sets integer NOT NULL DEFAULT 0,repetitions integer NOT NULL DEFAULT 0,weight double precision NOT NULL DEFAULT 0,duration_seconds integer NOT NULL DEFAULT 0,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `ALTER TABLE ` + q + `.plans ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_days ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_items ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `CREATE UNIQUE INDEX IF NOT EXISTS plan_days_unique ON ` + q + `.workout_days(plan_id,workout_date)`, `CREATE UNIQUE INDEX IF NOT EXISTS plans_idempotency_unique ON ` + q + `.plans(user_id,idempotency_key) WHERE idempotency_key <> ''`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_days_idempotency_unique ON ` + q + `.workout_days(user_id,idempotency_key) WHERE idempotency_key <> ''`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_items_idempotency_unique ON ` + q + `.workout_items(user_id,idempotency_key) WHERE idempotency_key <> ''`, `CREATE INDEX IF NOT EXISTS plans_user_id_idx ON ` + q + `.plans(user_id)`, `CREATE INDEX IF NOT EXISTS workout_days_user_plan_idx ON ` + q + `.workout_days(user_id,plan_id)`, `CREATE INDEX IF NOT EXISTS workout_items_user_day_idx ON ` + q + `.workout_items(user_id,workout_day_id)`} {
+	for _, x := range []string{`CREATE SCHEMA IF NOT EXISTS ` + q, `CREATE TABLE IF NOT EXISTS ` + q + `.plans (id text PRIMARY KEY,user_id text NOT NULL,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,status text NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_days (id text PRIMARY KEY,user_id text NOT NULL,plan_id text NOT NULL REFERENCES ` + q + `.plans(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',workout_date date NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_items (id text PRIMARY KEY,user_id text NOT NULL,workout_day_id text NOT NULL REFERENCES ` + q + `.workout_days(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,sets integer NOT NULL DEFAULT 0,repetitions integer NOT NULL DEFAULT 0,weight double precision NOT NULL DEFAULT 0,duration_seconds integer NOT NULL DEFAULT 0,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `ALTER TABLE ` + q + `.plans ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_days ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_items ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `CREATE UNIQUE INDEX IF NOT EXISTS plan_days_unique ON ` + q + `.workout_days(plan_id,workout_date)`, `CREATE UNIQUE INDEX IF NOT EXISTS plans_idempotency_unique ON ` + q + `.plans(user_id,idempotency_key) WHERE idempotency_key <> ''`, `DROP INDEX IF EXISTS ` + q + `.workout_days_idempotency_unique`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_days_idempotency_unique ON ` + q + `.workout_days(user_id,plan_id,idempotency_key) WHERE idempotency_key <> ''`, `DROP INDEX IF EXISTS ` + q + `.workout_items_idempotency_unique`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_items_idempotency_unique ON ` + q + `.workout_items(user_id,workout_day_id,idempotency_key) WHERE idempotency_key <> ''`, `CREATE INDEX IF NOT EXISTS plans_user_id_idx ON ` + q + `.plans(user_id)`, `CREATE INDEX IF NOT EXISTS workout_days_user_plan_idx ON ` + q + `.workout_days(user_id,plan_id)`, `CREATE INDEX IF NOT EXISTS workout_items_user_day_idx ON ` + q + `.workout_items(user_id,workout_day_id)`} {
 		if e := db.WithContext(ctx).Exec(x).Error; e != nil {
 			return fmt.Errorf("migration: %w", e)
 		}
@@ -78,12 +78,16 @@ func (r GORM) CreateDay(c context.Context, d *model.WorkoutDay) error {
 	if d.IdempotencyKey == "" {
 		return r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Create(d).Error
 	}
-	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Clauses(clause.OnConflict{DoNothing: true}).Create(d)
+	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "plan_id"}, {Name: "idempotency_key"}},
+		DoNothing: true,
+		Where:     clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
+	}).Create(d)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Where("user_id=? AND idempotency_key=?", d.UserID, d.IdempotencyKey).First(d).Error
+		return r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Where("user_id=? AND plan_id=? AND idempotency_key=?", d.UserID, d.PlanID, d.IdempotencyKey).First(d).Error
 	}
 	return nil
 }
@@ -123,12 +127,16 @@ func (r GORM) CreateItem(c context.Context, i *model.WorkoutItem) error {
 	if i.IdempotencyKey == "" {
 		return r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Create(i).Error
 	}
-	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Clauses(clause.OnConflict{DoNothing: true}).Create(i)
+	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "workout_day_id"}, {Name: "idempotency_key"}},
+		DoNothing: true,
+		Where:     clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
+	}).Create(i)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Where("user_id=? AND idempotency_key=?", i.UserID, i.IdempotencyKey).First(i).Error
+		return r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Where("user_id=? AND workout_day_id=? AND idempotency_key=?", i.UserID, i.WorkoutDayID, i.IdempotencyKey).First(i).Error
 	}
 	return nil
 }
