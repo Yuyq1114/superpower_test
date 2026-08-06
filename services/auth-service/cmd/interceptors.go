@@ -8,22 +8,48 @@ import (
 	"time"
 
 	"github.com/example/fitness-checkin/pkg/observability"
+	authv1 "github.com/example/fitness-checkin/proto/gen/auth/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 )
+
+type authenticatedUserIDKey struct{}
+
+func WithAuthenticatedUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, authenticatedUserIDKey{}, userID)
+}
+func AuthenticatedUserID(ctx context.Context) string {
+	if value, ok := ctx.Value(authenticatedUserIDKey{}).(string); ok {
+		return value
+	}
+	return ""
+}
 
 func requestLogger(logger *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		requestID, traceID := requestIDs(ctx)
 		resp, err := handler(ctx, req)
-		logger.LogAttrs(ctx, slog.LevelInfo, "request completed", slog.String("request_id", requestID), slog.String("trace_id", traceID), slog.String("user_id", userID(ctx)), slog.String("method", info.FullMethod), slog.Any("error", err))
+		userID := AuthenticatedUserID(ctx)
+		if userID == "" {
+			userID = responseUserID(resp)
+		}
+		logger.LogAttrs(ctx, slog.LevelInfo, "request completed", slog.String("request_id", requestID), slog.String("trace_id", traceID), slog.String("user_id", userID), slog.String("method", info.FullMethod), slog.Any("error", err))
 		return resp, err
 	}
 }
 
-func userID(ctx context.Context) string {
-	md, _ := metadata.FromIncomingContext(ctx)
-	return firstMetadata(md, "x-user-id")
+func responseUserID(resp any) string {
+	switch response := resp.(type) {
+	case *authv1.AuthResponse:
+		if response.GetUser() != nil {
+			return response.GetUser().GetId()
+		}
+	case *authv1.GetUserResponse:
+		if response.GetUser() != nil {
+			return response.GetUser().GetId()
+		}
+	}
+	return ""
 }
 
 func requestIDs(ctx context.Context) (string, string) {

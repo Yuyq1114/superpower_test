@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/example/fitness-checkin/pkg/apperror"
 	"github.com/example/fitness-checkin/services/auth-service/internal/model"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"sync"
 	"testing"
@@ -192,5 +193,15 @@ func TestConcurrentRefreshOnlyOneSucceeds(t *testing.T) {
 	wg.Wait()
 	if success != 1 {
 		t.Fatalf("successful refreshes = %d", success)
+	}
+}
+
+func TestRegisterMapsPostgresUniqueViolationToConflict(t *testing.T) {
+	u := &memUsers{map[string]model.User{}}
+	r := &memTokens{m: map[string]model.RefreshToken{}}
+	err := &pgconn.PgError{Code: "23505"}
+	s := NewAuthService(u, r, memUnitOfWork{users: u, tokens: r, failAfterUser: true, fail: err}, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
+	if _, _, got := s.Register(context.Background(), "unique@example.com", "ValidPass123"); apperror.CodeOf(got) != apperror.CodeConflict {
+		t.Fatalf("error: %v", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/example/fitness-checkin/services/auth-service/internal/model"
 	"github.com/example/fitness-checkin/services/auth-service/internal/repository"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"strings"
@@ -30,6 +31,14 @@ type AuthService struct {
 func NewAuthService(u repository.User, t repository.RefreshToken, uow repository.UnitOfWork, m *TokenManager) *AuthService {
 	return &AuthService{users: u, tokens: t, uow: uow, tm: m}
 }
+func isUniqueViolation(err error) bool {
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 func (s *AuthService) issue(uid string, now time.Time) (TokenPair, model.RefreshToken, error) {
 	pair, hash, err := s.tm.IssueAt(uid, now)
 	if err != nil {
@@ -53,7 +62,7 @@ func (s *AuthService) Register(c context.Context, email, password string) (model
 		return model.User{}, TokenPair{}, err
 	}
 	if err = s.uow.CreateUserWithRefreshToken(c, &u, &token); err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
+		if isUniqueViolation(err) {
 			return model.User{}, TokenPair{}, apperror.Conflict("email already registered")
 		}
 		return model.User{}, TokenPair{}, apperror.Internal("unable to create user")
