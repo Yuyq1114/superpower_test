@@ -6,6 +6,7 @@ import (
 	"github.com/example/fitness-checkin/pkg/apperror"
 	"github.com/example/fitness-checkin/services/auth-service/internal/model"
 	"gorm.io/gorm"
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,13 +36,20 @@ func (x *memUsers) ByID(_ context.Context, id string) (model.User, error) {
 	return model.User{}, gorm.ErrRecordNotFound
 }
 
-type memTokens struct{ m map[string]model.RefreshToken }
+type memTokens struct {
+	mu sync.Mutex
+	m  map[string]model.RefreshToken
+}
 
 func (x *memTokens) Create(_ context.Context, t *model.RefreshToken) error {
+	x.mu.Lock()
+	defer x.mu.Unlock()
 	x.m[t.TokenHash] = *t
 	return nil
 }
 func (x *memTokens) Rotate(_ context.Context, h string, now time.Time, issue func(string) (*model.RefreshToken, error)) (model.RefreshToken, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
 	o, ok := x.m[h]
 	if !ok || o.RevokedAt != nil || !o.ExpiresAt.After(now) {
 		return model.RefreshToken{}, gorm.ErrRecordNotFound
@@ -57,6 +65,8 @@ func (x *memTokens) Rotate(_ context.Context, h string, now time.Time, issue fun
 	return *n, nil
 }
 func (x *memTokens) Revoke(_ context.Context, h string, now time.Time) error {
+	x.mu.Lock()
+	defer x.mu.Unlock()
 	o, ok := x.m[h]
 	if !ok || o.RevokedAt != nil {
 		return gorm.ErrRecordNotFound
@@ -84,7 +94,7 @@ func (x memUnitOfWork) CreateUserWithRefreshToken(c context.Context, u *model.Us
 
 func TestRegisterTransactionFailureLeavesNoUser(t *testing.T) {
 	users := &memUsers{map[string]model.User{}}
-	tokens := &memTokens{map[string]model.RefreshToken{}}
+	tokens := &memTokens{m: map[string]model.RefreshToken{}}
 	s := NewAuthService(users, tokens, memUnitOfWork{users: users, tokens: tokens, fail: errors.New("token insert failed")}, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
 	if _, _, err := s.Register(context.Background(), "rollback@example.com", "ValidPass123"); apperror.CodeOf(err) != apperror.CodeInternal {
 		t.Fatalf("register: %v", err)
@@ -96,7 +106,7 @@ func TestRegisterTransactionFailureLeavesNoUser(t *testing.T) {
 
 func setup() *AuthService {
 	u := &memUsers{map[string]model.User{}}
-	r := &memTokens{map[string]model.RefreshToken{}}
+	r := &memTokens{m: map[string]model.RefreshToken{}}
 	return NewAuthService(u, r, memUnitOfWork{users: u, tokens: r}, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
 }
 func TestRegisterLoginAndDuplicate(t *testing.T) {
@@ -146,5 +156,31 @@ func TestRefreshRotationLogoutAndRevocation(t *testing.T) {
 func TestGetUserNotFound(t *testing.T) {
 	if _, e := setup().GetUser(context.Background(), "missing"); apperror.CodeOf(e) != apperror.CodeNotFound {
 		t.Fatalf("not found: %v", e)
+	}
+}
+
+func TestConcurrentRefreshOnlyOneSucceeds(t *testing.T) {
+	s := setup()
+	_, pair, err := s.Register(context.Background(), "concurrent@example.com", "ValidPass123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	success := 0
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.Refresh(context.Background(), pair.RefreshToken); err == nil {
+				mu.Lock()
+				success++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if success != 1 {
+		t.Fatalf("successful refreshes = %d", success)
 	}
 }

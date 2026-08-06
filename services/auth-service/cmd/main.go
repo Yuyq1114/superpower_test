@@ -41,11 +41,15 @@ func main() {
 		logger.Error("database failed", "error", err)
 		return
 	}
+	if err = repository.Migrate(connectCtx, db); err != nil {
+		logger.Error("migration failed", "error", err)
+		return
+	}
 	uow := repository.GORMUnitOfWork{DB: db}
-	svc := service.NewAuthService(repository.GORMUser{DB: db}, repository.GORMRefreshToken{DB: db}, uow, service.NewTokenManager([]byte(cfg.JWTSecret), 15*time.Minute, 30*24*time.Hour))
+	svc := service.NewAuthService(repository.GORMUser{DB: db, Schema: repository.DefaultSchema}, repository.GORMRefreshToken{DB: db, Schema: repository.DefaultSchema}, uow, service.NewTokenManager([]byte(cfg.JWTSecret), 15*time.Minute, 30*24*time.Hour))
 	reg := observability.NewRegistry()
 	metrics := observability.NewMetrics(reg)
-	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(defaultDeadlineInterceptor(5*time.Second), metricsInterceptor(metrics)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Hour, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: true}))
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(defaultDeadlineInterceptor(5*time.Second), requestLogger(logger), metricsInterceptor(metrics)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Hour, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: true}))
 	authv1.RegisterAuthServiceServer(gs, authgrpc.NewServer(svc))
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {

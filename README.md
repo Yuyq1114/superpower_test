@@ -1,4 +1,4 @@
-﻿# Fitness Check-in MVP
+# Fitness Check-in MVP
 
 ## 本地基础设施
 
@@ -13,3 +13,8 @@ docker compose -f deploy/docker-compose.yml up -d postgres redis
 PostgreSQL 初始化脚本创建五个服务角色及各自 schema，并设置 USAGE/CREATE 和表、序列默认权限。业务服务迁移时应使用自己的 `*_service` 角色和 `storage.PostgresSchemaTarget`，不要使用全量 schema 初始化权限。Redis 使用 `REDIS_PASSWORD` 注入 `requirepass`。
 
 集成测试通过 `TEST_DATABASE_DSN` 和 `TEST_REDIS_ADDR` 启用；未设置时会清楚跳过，不影响快速单元测试。
+
+
+## auth-service 依赖
+
+auth-service 仅依赖 PostgreSQL。启动时会执行 uth_schema 迁移；/readyz 只检查 PostgreSQL。Redis 是其他服务的基础设施，不是 auth-service 的运行依赖。

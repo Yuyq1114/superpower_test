@@ -2,12 +2,44 @@ package main
 
 import (
 	"context"
+	"github.com/google/uuid"
+	"google.golang.org/grpc/metadata"
+	"log/slog"
 	"time"
 
 	"github.com/example/fitness-checkin/pkg/observability"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 )
+
+func requestLogger(logger *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		requestID, traceID := requestIDs(ctx)
+		resp, err := handler(ctx, req)
+		logger.LogAttrs(ctx, slog.LevelInfo, "request completed", slog.String("request_id", requestID), slog.String("trace_id", traceID), slog.String("user_id", ""), slog.String("method", info.FullMethod), slog.Any("error", err))
+		return resp, err
+	}
+}
+
+func requestIDs(ctx context.Context) (string, string) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	requestID := firstMetadata(md, "x-request-id")
+	traceID := firstMetadata(md, "x-trace-id")
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	if traceID == "" {
+		traceID = uuid.NewString()
+	}
+	return requestID, traceID
+}
+
+func firstMetadata(md metadata.MD, key string) string {
+	if values := md.Get(key); len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
 
 func metricsInterceptor(metrics *observability.Metrics) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {

@@ -10,5 +10,14 @@ func NewLogger(service string, output io.Writer) *slog.Logger {
 	if output == nil {
 		output = os.Stdout
 	}
-	return slog.New(slog.NewJSONHandler(output, nil)).With("service", service)
+	options := &slog.HandlerOptions{ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+		switch attr.Key {
+		case slog.TimeKey:
+			attr.Key = "timestamp"
+		case slog.MessageKey:
+			attr.Key = "message"
+		}
+		return attr
+	}}
+	return slog.New(slog.NewJSONHandler(output, options)).With("service", service)
 }
