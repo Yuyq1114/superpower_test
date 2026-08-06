@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/example/fitness-checkin/pkg/config"
@@ -13,7 +14,16 @@ import (
 
 const postgresConnectTimeout = 5 * time.Second
 
-var defaultPostgresSchemas = []string{"auth_schema", "plan_schema", "checkin_schema", "profile_schema", "statistics_schema"}
+var (
+	defaultPostgresTargets = []PostgresSchemaTarget{
+		{Schema: "auth_schema", Role: "auth_service"},
+		{Schema: "plan_schema", Role: "plan_service"},
+		{Schema: "checkin_schema", Role: "checkin_service"},
+		{Schema: "profile_schema", Role: "profile_service"},
+		{Schema: "statistics_schema", Role: "statistics_service"},
+	}
+	postgresIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 type PostgresSchemaTarget struct {
 	Schema string
@@ -44,34 +54,54 @@ func OpenPostgres(ctx context.Context, cfg config.Config) (*gorm.DB, error) {
 	return db, nil
 }
 
-// InitPostgresSchemas is the local migration entry point. Pass explicit targets
-// for a service so it only needs its own schema role.
+// InitPostgresSchemas is the migration entry point. Services should pass only
+// their own target; the empty-target form is reserved for admin bootstrap.
 func InitPostgresSchemas(ctx context.Context, db *gorm.DB, targets ...PostgresSchemaTarget) error {
 	if db == nil {
 		return errors.New("database is required")
 	}
 	if len(targets) == 0 {
-		for _, schema := range defaultPostgresSchemas {
-			targets = append(targets, PostgresSchemaTarget{Schema: schema})
+		targets = defaultPostgresTargets
+	}
+	for _, target := range targets {
+		if err := validatePostgresTarget(target); err != nil {
+			return err
 		}
 	}
 	for _, target := range targets {
-		if target.Schema == "" {
-			return errors.New("schema is required")
-		}
-		if err := db.WithContext(ctx).Exec("CREATE SCHEMA IF NOT EXISTS \"" + target.Schema + "\"").Error; err != nil {
-			return fmt.Errorf("create schema %s: %w", target.Schema, err)
+		qualifiedSchema := quotePostgresIdentifier(target.Schema)
+		qualifiedRole := quotePostgresIdentifier(target.Role)
+		query := fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s; ALTER SCHEMA %s OWNER TO %s", qualifiedSchema, qualifiedSchema, qualifiedRole)
+		if err := db.WithContext(ctx).Exec(query).Error; err != nil {
+			return fmt.Errorf("initialize schema %s for role %s: %w", target.Schema, target.Role, err)
 		}
 	}
 	return nil
+}
+
+func validatePostgresTarget(target PostgresSchemaTarget) error {
+	if !postgresIdentifier.MatchString(target.Schema) {
+		return errors.New("schema must be a safe SQL identifier")
+	}
+	if target.Role == "" {
+		return fmt.Errorf("role is required for schema %s", target.Schema)
+	}
+	if !postgresIdentifier.MatchString(target.Role) {
+		return fmt.Errorf("role %q must be a safe SQL identifier", target.Role)
+	}
+	return nil
+}
+
+func quotePostgresIdentifier(identifier string) string {
+	return `"` + identifier + `"`
 }
 
 func PostgresSchemaExists(ctx context.Context, db *gorm.DB, schema string) (bool, error) {
 	if db == nil {
 		return false, errors.New("database is required")
 	}
-	if schema == "" {
-		return false, errors.New("schema is required")
+	if !postgresIdentifier.MatchString(schema) {
+		return false, errors.New("schema must be a safe SQL identifier")
 	}
 	var count int64
 	err := db.WithContext(ctx).Raw("SELECT count(*) FROM information_schema.schemata WHERE schema_name = ?", schema).Scan(&count).Error
