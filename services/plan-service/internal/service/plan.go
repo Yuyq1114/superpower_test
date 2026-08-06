@@ -127,6 +127,12 @@ func (s *Service) AddWorkoutDay(c context.Context, u, pid string, in WorkoutDayI
 	return d, s.repo.CreateDay(c, &d)
 }
 func (s *Service) UpdateWorkoutDay(c context.Context, u, pid, did string, in WorkoutDayInput) (model.WorkoutDay, error) {
+	if e := validateUser(u); e != nil {
+		return model.WorkoutDay{}, e
+	}
+	if pid == "" {
+		return model.WorkoutDay{}, apperror.InvalidArgument("plan_id is required")
+	}
 	if did == "" {
 		return model.WorkoutDay{}, apperror.InvalidArgument("workout_day_id is required")
 	}
@@ -186,6 +192,12 @@ func validItem(in WorkoutItemInput) error {
 	return nil
 }
 func (s *Service) AddWorkoutItem(c context.Context, u, did string, in WorkoutItemInput) (model.WorkoutItem, error) {
+	if e := validateUser(u); e != nil {
+		return model.WorkoutItem{}, e
+	}
+	if did == "" {
+		return model.WorkoutItem{}, apperror.InvalidArgument("workout_day_id is required")
+	}
 	if e := validItem(in); e != nil {
 		return model.WorkoutItem{}, e
 	}
@@ -197,6 +209,15 @@ func (s *Service) AddWorkoutItem(c context.Context, u, did string, in WorkoutIte
 	return i, s.repo.CreateItem(c, &i)
 }
 func (s *Service) UpdateWorkoutItem(c context.Context, u, did, iid string, in WorkoutItemInput) (model.WorkoutItem, error) {
+	if e := validateUser(u); e != nil {
+		return model.WorkoutItem{}, e
+	}
+	if did == "" {
+		return model.WorkoutItem{}, apperror.InvalidArgument("workout_day_id is required")
+	}
+	if iid == "" {
+		return model.WorkoutItem{}, apperror.InvalidArgument("workout_item_id is required")
+	}
 	if e := validItem(in); e != nil {
 		return model.WorkoutItem{}, e
 	}
