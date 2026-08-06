@@ -1,0 +1,8 @@
+syntax = "proto3";
+package statistics.v1;
+option go_package = "github.com/example/fitness-checkin/services/statistics-service/internal/gen/statistics/v1;statisticsv1";
+enum Period { PERIOD_UNSPECIFIED = 0; PERIOD_WEEK = 1; PERIOD_MONTH = 2; }
+message Summary { string user_id = 1; Period period = 2; string start = 3; string end = 4; int64 workout_count = 5; int64 active_days = 6; int64 total_duration_seconds = 7; }
+message GetSummaryRequest { string user_id = 1; Period period = 2; string start = 3; string end = 4; }
+message GetSummaryResponse { Summary summary = 1; }
+service StatisticsService { rpc GetSummary(GetSummaryRequest) returns (GetSummaryResponse); }

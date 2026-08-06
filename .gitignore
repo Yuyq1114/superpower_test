@@ -1,2 +1,11 @@
-﻿.worktrees/
+.worktrees/
 
+# Build output
+/bin/
+/bin
+*.exe
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example

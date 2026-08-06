@@ -1,0 +1,12 @@
+syntax = "proto3";
+package checkin.v1;
+option go_package = "github.com/example/fitness-checkin/services/checkin-service/internal/gen/checkin/v1;checkinv1";
+message PageRequest { int32 page = 1; int32 page_size = 2; }
+message PageInfo { int32 page = 1; int32 page_size = 2; int64 total = 3; }
+message Checkin { string id = 1; string user_id = 2; string workout_item_id = 3; string date = 4; string note = 5; string completed_at = 6; }
+message CompleteRequest { string user_id = 1; string workout_item_id = 2; string date = 3; string note = 4; string idempotency_key = 5; }
+message CompleteResponse { Checkin checkin = 1; }
+message ListHistoryRequest { string user_id = 1; string from = 2; string to = 3; PageRequest page = 4; }
+message ListHistoryResponse { repeated Checkin checkins = 1; PageInfo page = 2; int32 streak = 3; }
+service CheckinService { rpc Complete(CompleteRequest) returns (CompleteResponse); rpc ListHistory(ListHistoryRequest) returns (ListHistoryResponse); }
+message WorkoutCompleted { string event_id = 1; string event_type = 2; string user_id = 3; string checkin_id = 4; string completed_at = 5; string occurred_at = 6; }
