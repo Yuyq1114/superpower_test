@@ -29,10 +29,15 @@ func fingerprint(i MetricInput) string {
 	return hex.EncodeToString(h[:])
 }
 func (s *Service) RecordMetric(ctx context.Context, u string, i MetricInput) (model.Metric, error) {
+	u = strings.TrimSpace(u)
 	i.MetricType = strings.TrimSpace(i.MetricType)
 	i.Unit = strings.TrimSpace(i.Unit)
-	if strings.TrimSpace(u) == "" {
+	i.IdempotencyKey = strings.TrimSpace(i.IdempotencyKey)
+	if u == "" {
 		return model.Metric{}, apperror.InvalidArgument("user_id is required")
+	}
+	if len(i.IdempotencyKey) < 1 || len(i.IdempotencyKey) > 128 {
+		return model.Metric{}, apperror.InvalidArgument("idempotency_key length must be between 1 and 128")
 	}
 	if i.MetricType != "weight" && i.MetricType != "body_fat" {
 		return model.Metric{}, apperror.InvalidArgument("metric_type must be weight or body_fat")
@@ -55,8 +60,13 @@ func (s *Service) RecordMetric(ctx context.Context, u string, i MetricInput) (mo
 	return m, nil
 }
 func (s *Service) ListMetrics(ctx context.Context, u, t string, from, to time.Time) ([]model.Metric, error) {
-	if strings.TrimSpace(u) == "" {
+	u = strings.TrimSpace(u)
+	t = strings.TrimSpace(t)
+	if u == "" {
 		return nil, apperror.InvalidArgument("user_id is required")
+	}
+	if t != "" && t != "weight" && t != "body_fat" {
+		return nil, apperror.InvalidArgument("metric_type must be weight or body_fat")
 	}
 	if !from.IsZero() && !to.IsZero() && from.After(to) {
 		return nil, apperror.InvalidArgument("invalid time range")
@@ -67,5 +77,5 @@ func (s *Service) ListMetrics(ctx context.Context, u, t string, from, to time.Ti
 	if to.IsZero() {
 		to = time.Now()
 	}
-	return s.repo.List(ctx, u, strings.TrimSpace(t), from.UTC(), to.UTC())
+	return s.repo.List(ctx, u, t, from.UTC(), to.UTC())
 }

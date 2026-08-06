@@ -18,16 +18,23 @@ func table(schema, name string) string {
 	}
 	return `"` + schema + `"."` + name + `"`
 }
-func Migrate(ctx context.Context, db *gorm.DB) error {
+func migrationSQL() []string {
 	s := `"` + DefaultSchema + `"`
 	qs := []string{
-		`CREATE SCHEMA IF NOT EXISTS ` + s,
-		`CREATE TABLE IF NOT EXISTS ` + s + `.metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,idempotency_key text NOT NULL DEFAULT '',request_fingerprint text NOT NULL DEFAULT '',created_at timestamptz NOT NULL,CONSTRAINT metrics_type_unit_range CHECK ((metric_type='weight' AND unit='kg' AND value > 0 AND value <= 500) OR (metric_type='body_fat' AND unit='percent' AND value >= 0 AND value <= 100)))`,
-		`ALTER TABLE ` + s + `.metrics ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + s + `.metrics ADD COLUMN IF NOT EXISTS request_fingerprint text NOT NULL DEFAULT ''`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS metrics_user_idempotency_unique ON ` + s + `.metrics(user_id,idempotency_key) WHERE idempotency_key <> ''`, `CREATE INDEX IF NOT EXISTS metrics_user_recorded_at_idx ON ` + s + `.metrics(user_id,recorded_at DESC)`}
-	for _, q := range qs {
-		if err := db.WithContext(ctx).Exec(q).Error; err != nil {
-			return fmt.Errorf("migration: %w", err)
+		"CREATE SCHEMA IF NOT EXISTS " + s,
+		"CREATE TABLE IF NOT EXISTS " + s + ".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,idempotency_key text NOT NULL DEFAULT '',request_fingerprint text NOT NULL DEFAULT '',created_at timestamptz NOT NULL)",
+		"ALTER TABLE " + s + ".metrics ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''",
+		"ALTER TABLE " + s + ".metrics ADD COLUMN IF NOT EXISTS request_fingerprint text NOT NULL DEFAULT ''",
+		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM " + s + ".metrics WHERE NOT ((metric_type='weight' AND unit='kg' AND value > 0 AND value <= 500) OR (metric_type='body_fat' AND unit='percent' AND value >= 0 AND value <= 100)) LIMIT 1) THEN RAISE EXCEPTION 'profile metrics contain invalid type, unit, or value'; END IF; IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='metrics_type_unit_range' AND conrelid=('" + s + ".metrics')::regclass) THEN ALTER TABLE " + s + ".metrics DROP CONSTRAINT metrics_type_unit_range; END IF; ALTER TABLE " + s + ".metrics ADD CONSTRAINT metrics_type_unit_range CHECK ((metric_type='weight' AND unit='kg' AND value > 0 AND value <= 500) OR (metric_type='body_fat' AND unit='percent' AND value >= 0 AND value <= 100)); END $$",
+		"CREATE UNIQUE INDEX IF NOT EXISTS metrics_user_idempotency_unique ON " + s + ".metrics(user_id,idempotency_key) WHERE idempotency_key <> ''",
+		"CREATE INDEX IF NOT EXISTS metrics_user_recorded_at_idx ON " + s + ".metrics(user_id,recorded_at DESC)"}
+	return qs
+}
+
+func Migrate(ctx context.Context, db *gorm.DB) error {
+	for _, q := range migrationSQL() {
+		if e := db.WithContext(ctx).Exec(q).Error; e != nil {
+			return fmt.Errorf("migration: %w", e)
 		}
 	}
 	return nil
@@ -53,8 +60,8 @@ func (r GORM) Create(ctx context.Context, m *model.Metric) error {
 	}
 	if x.RowsAffected == 0 {
 		var old model.Metric
-		if err := q.Where("user_id=? AND idempotency_key=?", m.UserID, m.IdempotencyKey).First(&old).Error; err != nil {
-			return err
+		if e := q.Where("user_id=? AND idempotency_key=?", m.UserID, m.IdempotencyKey).First(&old).Error; e != nil {
+			return e
 		}
 		if old.RequestFingerprint != m.RequestFingerprint {
 			return apperror.Conflict("idempotency key reused with different request")

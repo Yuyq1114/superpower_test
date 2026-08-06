@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/example/fitness-checkin/pkg/apperror"
 	profilev1 "github.com/example/fitness-checkin/proto/gen/profile/v1"
+	"github.com/example/fitness-checkin/services/profile-service/internal/identity"
 	"github.com/example/fitness-checkin/services/profile-service/internal/model"
 	"github.com/example/fitness-checkin/services/profile-service/internal/service"
 	"google.golang.org/grpc/codes"
@@ -32,11 +33,25 @@ func mapErr(e error) error {
 	switch apperror.CodeOf(e) {
 	case apperror.CodeInvalidArgument:
 		return status.Error(codes.InvalidArgument, e.Error())
+	case apperror.CodeUnauthenticated:
+		return status.Error(codes.Unauthenticated, "unauthenticated")
+	case apperror.CodePermissionDenied:
+		return status.Error(codes.PermissionDenied, "permission denied")
 	case apperror.CodeConflict:
 		return status.Error(codes.AlreadyExists, "conflict")
 	default:
 		return status.Error(codes.Internal, "internal error")
 	}
+}
+func authorize(ctx context.Context, u string) error {
+	trusted, _, _, ok := identity.FromContext(ctx)
+	if !ok {
+		return apperror.Unauthenticated("unauthenticated")
+	}
+	if trusted != u {
+		return apperror.PermissionDenied("permission denied")
+	}
+	return nil
 }
 func parseTime(v string) (time.Time, error) {
 	if strings.TrimSpace(v) == "" {
@@ -55,6 +70,9 @@ func (s *Server) RecordMetric(ctx context.Context, r *profilev1.RecordMetricRequ
 	if r == nil {
 		return nil, mapErr(apperror.InvalidArgument("request is required"))
 	}
+	if e := authorize(ctx, r.UserId); e != nil {
+		return nil, mapErr(e)
+	}
 	t, e := parseTime(r.RecordedAt)
 	if e != nil {
 		return nil, mapErr(e)
@@ -68,6 +86,9 @@ func (s *Server) RecordMetric(ctx context.Context, r *profilev1.RecordMetricRequ
 func (s *Server) ListMetrics(ctx context.Context, r *profilev1.ListMetricsRequest) (*profilev1.ListMetricsResponse, error) {
 	if r == nil {
 		return nil, mapErr(apperror.InvalidArgument("request is required"))
+	}
+	if e := authorize(ctx, r.UserId); e != nil {
+		return nil, mapErr(e)
 	}
 	var from, to time.Time
 	var e error

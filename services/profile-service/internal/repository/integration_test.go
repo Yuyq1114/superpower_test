@@ -2,51 +2,68 @@ package repository
 
 import (
 	"context"
+	"github.com/example/fitness-checkin/pkg/apperror"
 	"github.com/example/fitness-checkin/services/profile-service/internal/model"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestPostgresCRUDIsolationIdempotencyAndSort(t *testing.T) {
+func integrationDB(t *testing.T) *gorm.DB {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_DSN")
 	if dsn == "" {
-		t.Skip("TEST_DATABASE_DSN is not set")
+		t.Skip("TEST_DATABASE_DSN is not set; skipping real PostgreSQL profile migration tests")
 	}
 	db, e := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if e != nil {
 		t.Fatal(e)
 	}
+	return db
+}
+func TestPostgresMigrationConstraintsUpgradeAndIdempotency(t *testing.T) {
+	db := integrationDB(t)
 	ctx := context.Background()
-	if e = Migrate(ctx, db); e != nil {
+	_ = db.Exec(`DROP SCHEMA IF EXISTS "profile_schema" CASCADE`).Error
+	if e := db.Exec(`CREATE SCHEMA "profile_schema"; CREATE TABLE "profile_schema".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,created_at timestamptz NOT NULL)`).Error; e != nil {
 		t.Fatal(e)
+	}
+	if e := Migrate(ctx, db); e != nil {
+		t.Fatal(e)
+	}
+	bad := model.Metric{ID: "bad", UserID: "u", MetricType: "weight", Value: 0, Unit: "kg", RecordedAt: time.Now(), IdempotencyKey: "bad", RequestFingerprint: "bad", CreatedAt: time.Now()}
+	if e := db.Table(table(DefaultSchema, "metrics")).Create(&bad).Error; e == nil {
+		t.Fatal("CHECK constraint accepted invalid metric")
 	}
 	r := GORM{DB: db, Schema: DefaultSchema}
-	u := "profile-test-" + time.Now().Format("150405.000000")
-	defer db.Exec(`DELETE FROM "profile_schema"."metrics" WHERE user_id LIKE ?`, u+"%")
-	t1 := time.Now().UTC().Add(-time.Hour)
-	a := model.Metric{ID: u + "-a", UserID: u, MetricType: "weight", Value: 70, Unit: "kg", RecordedAt: t1, IdempotencyKey: "k", RequestFingerprint: "f", CreatedAt: time.Now().UTC()}
-	if e = r.Create(ctx, &a); e != nil {
+	a := model.Metric{ID: "a", UserID: "u", MetricType: "weight", Value: 70, Unit: "kg", RecordedAt: time.Now(), IdempotencyKey: "k", RequestFingerprint: "f", CreatedAt: time.Now()}
+	if e := r.Create(ctx, &a); e != nil {
 		t.Fatal(e)
 	}
-	again := model.Metric{ID: u + "-b", UserID: u, MetricType: "weight", Value: 70, Unit: "kg", RecordedAt: t1, IdempotencyKey: "k", RequestFingerprint: "f", CreatedAt: time.Now().UTC()}
-	if e = r.Create(ctx, &again); e != nil || again.ID != a.ID {
-		t.Fatal("idempotency", e)
+	same := a
+	same.ID = "b"
+	if e := r.Create(ctx, &same); e != nil || same.ID != "a" {
+		t.Fatal("same fingerprint did not return original", e)
 	}
-	b := model.Metric{ID: u + "-c", UserID: u, MetricType: "weight", Value: 71, Unit: "kg", RecordedAt: t1.Add(time.Minute), CreatedAt: time.Now().UTC()}
-	if e = r.Create(ctx, &b); e != nil {
+	different := a
+	different.ID = "c"
+	different.RequestFingerprint = "other"
+	if e := r.Create(ctx, &different); apperror.CodeOf(e) != apperror.CodeConflict {
+		t.Fatal("expected idempotency conflict", e)
+	}
+}
+func TestPostgresMigrationRejectsExistingDirtyData(t *testing.T) {
+	db := integrationDB(t)
+	ctx := context.Background()
+	_ = db.Exec(`DROP SCHEMA IF EXISTS "profile_schema" CASCADE`).Error
+	if e := db.Exec(`CREATE SCHEMA "profile_schema"; CREATE TABLE "profile_schema".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,created_at timestamptz NOT NULL); INSERT INTO "profile_schema".metrics VALUES ('dirty','u','weight',0,'kg',now(),now())`).Error; e != nil {
 		t.Fatal(e)
 	}
-	other := b
-	other.ID = u + "-other"
-	other.UserID = u + "-2"
-	if e = r.Create(ctx, &other); e != nil {
-		t.Fatal(e)
-	}
-	got, e := r.List(ctx, u, "weight", t1.Add(-time.Minute), time.Now().UTC())
-	if e != nil || len(got) != 2 || got[0].ID != b.ID {
-		t.Fatalf("sort/isolation: %#v %v", got, e)
+	e := Migrate(ctx, db)
+	if e == nil || !strings.Contains(e.Error(), "profile metrics contain invalid type, unit, or value") {
+		t.Fatalf("expected explicit dirty data failure: %v", e)
 	}
 }
