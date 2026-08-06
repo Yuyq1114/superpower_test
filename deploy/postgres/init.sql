@@ -1,0 +1,5 @@
+﻿CREATE SCHEMA IF NOT EXISTS auth_schema;
+CREATE SCHEMA IF NOT EXISTS plan_schema;
+CREATE SCHEMA IF NOT EXISTS checkin_schema;
+CREATE SCHEMA IF NOT EXISTS profile_schema;
+CREATE SCHEMA IF NOT EXISTS statistics_schema;
