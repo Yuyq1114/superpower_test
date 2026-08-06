@@ -79,9 +79,9 @@ func (r GORM) CreateDay(c context.Context, d *model.WorkoutDay) error {
 		return r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Create(d).Error
 	}
 	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}, {Name: "plan_id"}, {Name: "idempotency_key"}},
-		DoNothing: true,
-		Where:     clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
+		Columns:     []clause.Column{{Name: "user_id"}, {Name: "plan_id"}, {Name: "idempotency_key"}},
+		DoNothing:   true,
+		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
 	}).Create(d)
 	if result.Error != nil {
 		return result.Error
@@ -128,9 +128,9 @@ func (r GORM) CreateItem(c context.Context, i *model.WorkoutItem) error {
 		return r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Create(i).Error
 	}
 	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}, {Name: "workout_day_id"}, {Name: "idempotency_key"}},
-		DoNothing: true,
-		Where:     clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
+		Columns:     []clause.Column{{Name: "user_id"}, {Name: "workout_day_id"}, {Name: "idempotency_key"}},
+		DoNothing:   true,
+		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
 	}).Create(i)
 	if result.Error != nil {
 		return result.Error
