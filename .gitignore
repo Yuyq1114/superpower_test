@@ -9,6 +9,4 @@
 .env
 .env.*
 !.env.example
-
-# Generated protobuf code
-proto/gen/
+`n
