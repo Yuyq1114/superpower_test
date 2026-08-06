@@ -97,9 +97,6 @@ func main() {
 }
 func deadline(d time.Duration) grpc.UnaryServerInterceptor {
 	return func(c context.Context, r any, i *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
-		if _, ok := c.Deadline(); ok {
-			return h(c, r)
-		}
 		x, cancel := context.WithTimeout(c, d)
 		defer cancel()
 		return h(x, r)
@@ -123,6 +120,7 @@ var _ = keepalive.ServerParameters{}
 func requestLogger(logger *slog.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		requestID, traceID := requestIDs(ctx)
+		ctx = context.WithValue(ctx, requestIdentityKey{}, requestIdentity{requestID: requestID, traceID: traceID})
 		resp, err := handler(ctx, req)
 		logger.InfoContext(ctx, "request completed", "level", "info", "trace_id", traceID, "request_id", requestID, "user_id", trustedUserID(ctx), "method", info.FullMethod, "error", err)
 		return resp, err
@@ -153,3 +151,5 @@ func trustedUserID(ctx context.Context) string {
 }
 
 type authenticatedUserIDKey struct{}
+type requestIdentityKey struct{}
+type requestIdentity struct{ requestID, traceID string }

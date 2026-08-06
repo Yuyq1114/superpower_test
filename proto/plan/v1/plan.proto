@@ -4,20 +4,20 @@ option go_package = "github.com/example/fitness-checkin/proto/gen/plan/v1;planv1
 message PageRequest { int32 page = 1; int32 page_size = 2; }
 message PageInfo { int32 page = 1; int32 page_size = 2; int64 total = 3; }
 message Plan { string id = 1; string user_id = 2; string name = 3; string status = 4; string created_at = 5; string updated_at = 6; }
-message WorkoutDay { string id = 1; string plan_id = 2; string date = 3; }
-message WorkoutItem { string id = 1; string workout_day_id = 2; string name = 3; int32 sets = 4; int32 repetitions = 5; double weight = 6; int32 duration_seconds = 7; }
-message CreatePlanRequest { string user_id = 1; string name = 2; }
+message WorkoutDay { string id = 1; string plan_id = 2; string date = 3; string created_at = 4; string updated_at = 5; }
+message WorkoutItem { string id = 1; string workout_day_id = 2; string name = 3; int32 sets = 4; int32 repetitions = 5; double weight = 6; int32 duration_seconds = 7; string created_at = 8; string updated_at = 9; }
+message CreatePlanRequest { string user_id = 1; string name = 2; string idempotency_key = 3; }
 message GetPlanRequest { string user_id = 1; string plan_id = 2; }
 message UpdatePlanRequest { string user_id = 1; string plan_id = 2; string name = 3; string status = 4; }
 message DeletePlanRequest { string user_id = 1; string plan_id = 2; }
 message ListPlansRequest { string user_id = 1; PageRequest page = 2; }
 message PlanResponse { Plan plan = 1; }
 message ListPlansResponse { repeated Plan plans = 1; PageInfo page = 2; }
-message AddWorkoutDayRequest { string user_id = 1; string plan_id = 2; string date = 3; }
+message AddWorkoutDayRequest { string user_id = 1; string plan_id = 2; string date = 3; string idempotency_key = 4; }
 message UpdateWorkoutDayRequest { string user_id = 1; string plan_id = 2; string workout_day_id = 3; string date = 4; }
 message DeleteWorkoutDayRequest { string user_id = 1; string plan_id = 2; string workout_day_id = 3; }
 message WorkoutDayResponse { WorkoutDay workout_day = 1; }
-message AddWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; WorkoutItem item = 3; }
+message AddWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; WorkoutItem item = 3; string idempotency_key = 4; }
 message UpdateWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; string workout_item_id = 3; WorkoutItem item = 4; }
 message DeleteWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; string workout_item_id = 3; }
 message WorkoutItemResponse { WorkoutItem item = 1; }

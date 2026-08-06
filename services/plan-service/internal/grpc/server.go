@@ -31,9 +31,6 @@ func mapErr(e error) error {
 		return status.Error(codes.DeadlineExceeded, "deadline exceeded")
 	}
 	if errors.Is(e, context.Canceled) {
-		return status.Error(codes.Canceled, e.Error())
-	}
-	if errors.Is(e, context.Canceled) {
 		return status.Error(codes.Canceled, "canceled")
 	}
 	if strings.Contains(strings.ToLower(e.Error()), "duplicate key") || strings.Contains(e.Error(), "23505") {
@@ -54,17 +51,23 @@ func mapErr(e error) error {
 		return status.Error(codes.Internal, "internal error")
 	}
 }
+func formatTime(v time.Time) string {
+	if v.IsZero() {
+		return ""
+	}
+	return v.UTC().Format(time.RFC3339)
+}
 func plan(p model.Plan) *planv1.Plan {
-	return &planv1.Plan{Id: p.ID, UserId: p.UserID, Name: p.Name, Status: p.Status, CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339)}
+	return &planv1.Plan{Id: p.ID, UserId: p.UserID, Name: p.Name, Status: p.Status, CreatedAt: formatTime(p.CreatedAt), UpdatedAt: formatTime(p.UpdatedAt)}
 }
 func day(d model.WorkoutDay) *planv1.WorkoutDay {
-	return &planv1.WorkoutDay{Id: d.ID, PlanId: d.PlanID, Date: d.Date.Format("2006-01-02")}
+	return &planv1.WorkoutDay{Id: d.ID, PlanId: d.PlanID, Date: d.Date.Format("2006-01-02"), CreatedAt: formatTime(d.CreatedAt), UpdatedAt: formatTime(d.UpdatedAt)}
 }
 func item(i model.WorkoutItem) *planv1.WorkoutItem {
-	return &planv1.WorkoutItem{Id: i.ID, WorkoutDayId: i.WorkoutDayID, Name: i.Name, Sets: int32(i.Sets), Repetitions: int32(i.Repetitions), Weight: i.Weight, DurationSeconds: int32(i.DurationSeconds)}
+	return &planv1.WorkoutItem{Id: i.ID, WorkoutDayId: i.WorkoutDayID, Name: i.Name, Sets: int32(i.Sets), Repetitions: int32(i.Repetitions), Weight: i.Weight, DurationSeconds: int32(i.DurationSeconds), CreatedAt: formatTime(i.CreatedAt), UpdatedAt: formatTime(i.UpdatedAt)}
 }
 func (s *Server) CreatePlan(c context.Context, r *planv1.CreatePlanRequest) (*planv1.PlanResponse, error) {
-	p, e := s.Svc.CreatePlan(c, r.UserId, service.CreatePlanInput{Name: r.Name})
+	p, e := s.Svc.CreatePlan(c, r.UserId, service.CreatePlanInput{Name: r.Name, IdempotencyKey: r.IdempotencyKey})
 	if e != nil {
 		return nil, mapErr(e)
 	}
@@ -106,7 +109,7 @@ func (s *Server) ListPlans(c context.Context, r *planv1.ListPlansRequest) (*plan
 	return &planv1.ListPlansResponse{Plans: out, Page: &planv1.PageInfo{Page: int32(p.Page), PageSize: int32(p.PageSize), Total: p.Total}}, nil
 }
 func (s *Server) AddWorkoutDay(c context.Context, r *planv1.AddWorkoutDayRequest) (*planv1.WorkoutDayResponse, error) {
-	d, e := s.Svc.AddWorkoutDay(c, r.UserId, r.PlanId, service.WorkoutDayInput{Date: parseDate(r.Date)})
+	d, e := s.Svc.AddWorkoutDay(c, r.UserId, r.PlanId, service.WorkoutDayInput{Date: parseDate(r.Date), IdempotencyKey: r.IdempotencyKey})
 	if e != nil {
 		return nil, mapErr(e)
 	}
@@ -126,7 +129,7 @@ func (s *Server) DeleteWorkoutDay(c context.Context, r *planv1.DeleteWorkoutDayR
 	return &planv1.Empty{}, nil
 }
 func (s *Server) AddWorkoutItem(c context.Context, r *planv1.AddWorkoutItemRequest) (*planv1.WorkoutItemResponse, error) {
-	i, e := s.Svc.AddWorkoutItem(c, r.UserId, r.WorkoutDayId, toInput(r.Item))
+	i, e := s.Svc.AddWorkoutItem(c, r.UserId, r.WorkoutDayId, toInput(r.Item, r.IdempotencyKey))
 	if e != nil {
 		return nil, mapErr(e)
 	}
@@ -197,9 +200,13 @@ func parseDate(v string) time.Time {
 	d, _ := time.Parse("2006-01-02", v)
 	return d
 }
-func toInput(i *planv1.WorkoutItem) service.WorkoutItemInput {
+func toInput(i *planv1.WorkoutItem, keys ...string) service.WorkoutItemInput {
 	if i == nil {
 		return service.WorkoutItemInput{}
 	}
-	return service.WorkoutItemInput{Name: i.Name, Sets: int(i.Sets), Repetitions: int(i.Repetitions), Weight: i.Weight, DurationSeconds: int(i.DurationSeconds)}
+	key := ""
+	if len(keys) > 0 {
+		key = keys[0]
+	}
+	return service.WorkoutItemInput{IdempotencyKey: key, Name: i.Name, Sets: int(i.Sets), Repetitions: int(i.Repetitions), Weight: i.Weight, DurationSeconds: int(i.DurationSeconds)}
 }
