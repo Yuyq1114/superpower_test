@@ -28,7 +28,7 @@ func TestPostgresMigrationConstraintsUpgradeAndIdempotency(t *testing.T) {
 	db := integrationDB(t)
 	ctx := context.Background()
 	_ = db.Exec(`DROP SCHEMA IF EXISTS "profile_schema" CASCADE`).Error
-	if e := db.Exec(`CREATE SCHEMA "profile_schema"; CREATE TABLE "profile_schema".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,created_at timestamptz NOT NULL)`).Error; e != nil {
+	if e := db.Exec(`CREATE SCHEMA "profile_schema"; CREATE TABLE "profile_schema".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,created_at timestamptz NOT NULL,idempotency_key text NOT NULL,request_fingerprint text NOT NULL DEFAULT '')`).Error; e != nil {
 		t.Fatal(e)
 	}
 	if e := Migrate(ctx, db); e != nil {
@@ -59,11 +59,11 @@ func TestPostgresMigrationRejectsExistingDirtyData(t *testing.T) {
 	db := integrationDB(t)
 	ctx := context.Background()
 	_ = db.Exec(`DROP SCHEMA IF EXISTS "profile_schema" CASCADE`).Error
-	if e := db.Exec(`CREATE SCHEMA "profile_schema"; CREATE TABLE "profile_schema".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,created_at timestamptz NOT NULL); INSERT INTO "profile_schema".metrics VALUES ('dirty','u','weight',0,'kg',now(),now())`).Error; e != nil {
+	if e := db.Exec(`CREATE SCHEMA "profile_schema"; CREATE TABLE "profile_schema".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,created_at timestamptz NOT NULL,idempotency_key text,request_fingerprint text NOT NULL DEFAULT ''); INSERT INTO "profile_schema".metrics (id,user_id,metric_type,value,unit,recorded_at,created_at,idempotency_key) VALUES ('dirty','u','weight',70,'kg',now(),now(),'')`).Error; e != nil {
 		t.Fatal(e)
 	}
 	e := Migrate(ctx, db)
-	if e == nil || !strings.Contains(e.Error(), "profile metrics contain invalid type, unit, or value") {
+	if e == nil || !strings.Contains(e.Error(), "profile metrics contain missing or invalid idempotency keys") {
 		t.Fatalf("expected explicit dirty data failure: %v", e)
 	}
 }

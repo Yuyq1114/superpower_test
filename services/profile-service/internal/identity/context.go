@@ -2,25 +2,26 @@ package identity
 
 import (
 	"context"
-	"errors"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/example/fitness-checkin/pkg/authclaims"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"regexp"
 	"strings"
-	"time"
 )
 
 type trusted struct{ UserID, TraceID, RequestID string }
 type key struct{}
 
+var correlationID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+
 func WithTrusted(ctx context.Context, u, t, r string) context.Context {
-	if t == "" {
+	if !correlationID.MatchString(t) {
 		t = uuid.NewString()
 	}
-	if r == "" {
+	if !correlationID.MatchString(r) {
 		r = uuid.NewString()
 	}
 	return context.WithValue(ctx, key{}, trusted{u, t, r})
@@ -29,9 +30,6 @@ func FromContext(ctx context.Context) (string, string, string, bool) {
 	v, ok := ctx.Value(key{}).(trusted)
 	return v.UserID, v.TraceID, v.RequestID, ok && v.UserID != ""
 }
-
-type claims struct{ jwt.RegisteredClaims }
-
 func UnaryServerInterceptor(secret string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
 		md, _ := metadata.FromIncomingContext(ctx)
@@ -39,16 +37,17 @@ func UnaryServerInterceptor(secret string) grpc.UnaryServerInterceptor {
 		if len(a) != 1 || !strings.HasPrefix(a[0], "Bearer ") {
 			return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 		}
-		c := &claims{}
-		tok, e := jwt.ParseWithClaims(strings.TrimSpace(strings.TrimPrefix(a[0], "Bearer ")), c, func(t *jwt.Token) (any, error) {
-			if t.Method != jwt.SigningMethodHS256 {
-				return nil, errors.New("invalid signing method")
-			}
-			return []byte(secret), nil
-		}, jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithLeeway(time.Second))
-		if e != nil || !tok.Valid || strings.TrimSpace(c.Subject) == "" {
+		u, e := authclaims.ParseAccess(strings.TrimSpace(strings.TrimPrefix(a[0], "Bearer ")), []byte(secret), nil)
+		if e != nil {
 			return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 		}
-		return h(WithTrusted(ctx, c.Subject, "", ""), req)
+		trace, request := "", ""
+		if x := md.Get("x-trace-id"); len(x) == 1 && correlationID.MatchString(x[0]) {
+			trace = x[0]
+		}
+		if x := md.Get("x-request-id"); len(x) == 1 && correlationID.MatchString(x[0]) {
+			request = x[0]
+		}
+		return h(WithTrusted(ctx, u, trace, request), req)
 	}
 }

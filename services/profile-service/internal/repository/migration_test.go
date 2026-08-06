@@ -5,11 +5,14 @@ import (
 	"testing"
 )
 
-func TestMigrationSQLUpgradesExistingTable(t *testing.T) {
+func TestMigrationSQLUsesExecutableRegclassAndEnforcesKeys(t *testing.T) {
 	src := strings.Join(migrationSQL(), "\n")
-	for _, want := range []string{"pg_constraint", "DROP CONSTRAINT metrics_type_unit_range", "ADD CONSTRAINT metrics_type_unit_range", "profile metrics contain invalid type, unit, or value", "metrics_user_idempotency_unique", "metrics_user_recorded_at_idx"} {
+	for _, want := range []string{"conrelid='profile_schema.metrics'::regclass", "missing or invalid idempotency keys", "ALTER COLUMN idempotency_key SET NOT NULL", "metrics_idempotency_key_length", "char_length(idempotency_key) BETWEEN 1 AND 128", "CREATE UNIQUE INDEX metrics_user_idempotency_unique"} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("migration missing %q", want)
 		}
+	}
+	if strings.Contains(src, "conrelid=('\"") {
+		t.Fatal("invalid quoted regclass SQL retained")
 	}
 }

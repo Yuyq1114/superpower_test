@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
+	"github.com/example/fitness-checkin/pkg/authclaims"
 	"github.com/golang-jwt/jwt/v5"
 	"strings"
 	"time"
@@ -49,28 +49,8 @@ func HashRefreshToken(raw string) string {
 	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
-type accessClaims struct {
-	Subject string `json:"sub"`
-	JWTID   string `json:"jti"`
-	jwt.RegisteredClaims
-}
-
 func (m *TokenManager) ParseAccess(raw string) (string, error) {
-	claims := &accessClaims{}
-	token, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (any, error) {
-		if t.Method != jwt.SigningMethodHS256 {
-			return nil, errors.New("invalid signing algorithm")
-		}
-		return m.secret, nil
-	}, jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(m.now))
-	if err != nil || !token.Valid || claims.Subject == "" || claims.JWTID == "" || claims.IssuedAt == nil || claims.ExpiresAt == nil {
-		return "", errors.New("invalid token")
-	}
-	now := m.now()
-	if claims.IssuedAt.Time.After(now) || !claims.ExpiresAt.Time.After(claims.IssuedAt.Time) {
-		return "", errors.New("invalid token")
-	}
-	return claims.Subject, nil
+	return authclaims.ParseAccess(raw, m.secret, m.now)
 }
 func validEmail(e string) bool {
 	return strings.Contains(e, "@") && !strings.ContainsAny(e, " \t\n") && strings.LastIndex(e, ".") > strings.Index(e, "@")

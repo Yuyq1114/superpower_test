@@ -20,17 +20,18 @@ func table(schema, name string) string {
 }
 func migrationSQL() []string {
 	s := `"` + DefaultSchema + `"`
-	qs := []string{
+	regclass := "'profile_schema.metrics'::regclass"
+	return []string{
 		"CREATE SCHEMA IF NOT EXISTS " + s,
-		"CREATE TABLE IF NOT EXISTS " + s + ".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,idempotency_key text NOT NULL DEFAULT '',request_fingerprint text NOT NULL DEFAULT '',created_at timestamptz NOT NULL)",
-		"ALTER TABLE " + s + ".metrics ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''",
+		"CREATE TABLE IF NOT EXISTS " + s + ".metrics (id text PRIMARY KEY,user_id text NOT NULL,metric_type text NOT NULL,value double precision NOT NULL,unit text NOT NULL,recorded_at timestamptz NOT NULL,idempotency_key text NOT NULL,request_fingerprint text NOT NULL DEFAULT '',created_at timestamptz NOT NULL,CONSTRAINT metrics_idempotency_key_length CHECK (char_length(idempotency_key) BETWEEN 1 AND 128))",
+		"ALTER TABLE " + s + ".metrics ADD COLUMN IF NOT EXISTS idempotency_key text",
 		"ALTER TABLE " + s + ".metrics ADD COLUMN IF NOT EXISTS request_fingerprint text NOT NULL DEFAULT ''",
-		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM " + s + ".metrics WHERE NOT ((metric_type='weight' AND unit='kg' AND value > 0 AND value <= 500) OR (metric_type='body_fat' AND unit='percent' AND value >= 0 AND value <= 100)) LIMIT 1) THEN RAISE EXCEPTION 'profile metrics contain invalid type, unit, or value'; END IF; IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='metrics_type_unit_range' AND conrelid=('" + s + ".metrics')::regclass) THEN ALTER TABLE " + s + ".metrics DROP CONSTRAINT metrics_type_unit_range; END IF; ALTER TABLE " + s + ".metrics ADD CONSTRAINT metrics_type_unit_range CHECK ((metric_type='weight' AND unit='kg' AND value > 0 AND value <= 500) OR (metric_type='body_fat' AND unit='percent' AND value >= 0 AND value <= 100)); END $$",
-		"CREATE UNIQUE INDEX IF NOT EXISTS metrics_user_idempotency_unique ON " + s + ".metrics(user_id,idempotency_key) WHERE idempotency_key <> ''",
+		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM " + s + ".metrics WHERE idempotency_key IS NULL OR char_length(idempotency_key) NOT BETWEEN 1 AND 128 LIMIT 1) THEN RAISE EXCEPTION 'profile metrics contain missing or invalid idempotency keys'; END IF; ALTER TABLE " + s + ".metrics ALTER COLUMN idempotency_key SET NOT NULL; IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='metrics_idempotency_key_length' AND conrelid=" + regclass + ") THEN ALTER TABLE " + s + ".metrics DROP CONSTRAINT metrics_idempotency_key_length; END IF; ALTER TABLE " + s + ".metrics ADD CONSTRAINT metrics_idempotency_key_length CHECK (char_length(idempotency_key) BETWEEN 1 AND 128); END $$",
+		"DO $$ BEGIN IF EXISTS (SELECT 1 FROM " + s + ".metrics WHERE NOT ((metric_type='weight' AND unit='kg' AND value > 0 AND value <= 500) OR (metric_type='body_fat' AND unit='percent' AND value >= 0 AND value <= 100)) LIMIT 1) THEN RAISE EXCEPTION 'profile metrics contain invalid type, unit, or value'; END IF; IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='metrics_type_unit_range' AND conrelid=" + regclass + ") THEN ALTER TABLE " + s + ".metrics DROP CONSTRAINT metrics_type_unit_range; END IF; ALTER TABLE " + s + ".metrics ADD CONSTRAINT metrics_type_unit_range CHECK ((metric_type='weight' AND unit='kg' AND value > 0 AND value <= 500) OR (metric_type='body_fat' AND unit='percent' AND value >= 0 AND value <= 100)); END $$",
+		"DROP INDEX IF EXISTS " + s + ".metrics_user_idempotency_unique",
+		"CREATE UNIQUE INDEX metrics_user_idempotency_unique ON " + s + ".metrics(user_id,idempotency_key)",
 		"CREATE INDEX IF NOT EXISTS metrics_user_recorded_at_idx ON " + s + ".metrics(user_id,recorded_at DESC)"}
-	return qs
 }
-
 func Migrate(ctx context.Context, db *gorm.DB) error {
 	for _, q := range migrationSQL() {
 		if e := db.WithContext(ctx).Exec(q).Error; e != nil {
@@ -51,10 +52,7 @@ type GORM struct {
 
 func (r GORM) Create(ctx context.Context, m *model.Metric) error {
 	q := r.DB.WithContext(ctx).Table(table(r.Schema, "metrics"))
-	if m.IdempotencyKey == "" {
-		return q.Create(m).Error
-	}
-	x := q.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "idempotency_key"}}, DoNothing: true, TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}}}).Create(m)
+	x := q.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "idempotency_key"}}, DoNothing: true}).Create(m)
 	if x.Error != nil {
 		return x.Error
 	}
