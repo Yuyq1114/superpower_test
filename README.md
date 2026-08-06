@@ -1,16 +1,15 @@
-# Fitness Check-in MVP
+﻿# Fitness Check-in MVP
 
-This repository contains the Go workspace and shared contracts for the fitness check-in microservices.
+## 本地基础设施
 
-## Requirements
+`deploy/docker-compose.yml` 仅将 PostgreSQL 和 Redis 绑定到 `127.0.0.1`。默认凭据是本地开发占位值，可通过未跟踪的 `.env` 或环境变量覆盖；不要提交生产 Secret。
 
-- Go 1.23 or newer
-- `protoc`, `protoc-gen-go`, and `protoc-gen-go-grpc` for generated gRPC code
+启动：
 
-## Commands
+```bash
+docker compose -f deploy/docker-compose.yml up -d postgres redis
+```
 
-- `make proto` generates protobuf code when the required tools are installed.
-- `go test ./pkg/...` runs shared package tests.
-- `go vet ./pkg/...` checks shared packages.
+PostgreSQL 初始化脚本创建五个服务角色及各自 schema，并设置 USAGE/CREATE 和表、序列默认权限。业务服务迁移时应使用自己的 `*_service` 角色和 `storage.PostgresSchemaTarget`，不要使用全量 schema 初始化权限。Redis 使用 `REDIS_PASSWORD` 注入 `requirepass`。
 
-Generated protobuf code belongs in the shared `proto/gen/` directory and must not be edited manually.
+集成测试通过 `TEST_DATABASE_DSN` 和 `TEST_REDIS_ADDR` 启用；未设置时会清楚跳过，不影响快速单元测试。

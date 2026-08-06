@@ -2,24 +2,55 @@ package storage
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/example/fitness-checkin/pkg/config"
+	"gorm.io/gorm"
 )
 
-func TestOpenPostgresReturnsConnectionError(t *testing.T) {
-	cfg := config.Config{DBDSN: "postgres://invalid:invalid@127.0.0.1:1/invalid?sslmode=disable"}
+func TestOpenPostgresUsesBoundedSinglePing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-
-	if _, err := OpenPostgres(ctx, cfg); err == nil {
-		t.Fatal("expected PostgreSQL connection error")
+	_, err := OpenPostgres(ctx, config.Config{DBDSN: "postgres://invalid:invalid@192.0.2.1:5432/invalid?sslmode=disable"})
+	if err == nil || !strings.Contains(err.Error(), "ping PostgreSQL") {
+		t.Fatalf("expected bounded ping error, got %v", err)
 	}
 }
 
 func TestInitPostgresSchemasRequiresDatabase(t *testing.T) {
 	if err := InitPostgresSchemas(context.Background(), nil); err == nil {
 		t.Fatal("expected nil database error")
+	}
+}
+
+func TestInitPostgresSchemasRequiresTargetSchema(t *testing.T) {
+	if err := InitPostgresSchemas(context.Background(), &gorm.DB{}, PostgresSchemaTarget{Role: "auth_service"}); err == nil {
+		t.Fatal("expected schema validation error")
+	}
+}
+
+func TestPostgresIntegration(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_DSN")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_DSN is not set; skipping PostgreSQL integration test")
+	}
+	db, err := OpenPostgres(context.Background(), config.Config{DBDSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	target := PostgresSchemaTarget{Schema: "auth_schema", Role: "auth_service"}
+	if err := InitPostgresSchemas(context.Background(), db, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := InitPostgresSchemas(context.Background(), db, target); err != nil {
+		t.Fatal(err)
 	}
 }
