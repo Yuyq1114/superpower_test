@@ -13,4 +13,4 @@ This repository contains the Go workspace and shared contracts for the fitness c
 - `go test ./pkg/...` runs shared package tests.
 - `go vet ./pkg/...` checks shared packages.
 
-Generated protobuf code belongs in each service's `internal/gen/` directory and must not be edited manually.
+Generated protobuf code belongs in the shared `proto/gen/` directory and must not be edited manually.
