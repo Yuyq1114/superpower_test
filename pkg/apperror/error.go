@@ -14,14 +14,14 @@ const (
 type Error struct {
 	Code    Code
 	Message string
-	Cause   error
+	cause   error
 }
 
 func (e *Error) Error() string            { return e.Message }
-func (e *Error) Unwrap() error            { return e.Cause }
+func (e *Error) Unwrap() error            { return e.cause }
 func New(code Code, message string) error { return &Error{Code: code, Message: message} }
 func wrap(code Code, message string, cause error) error {
-	return &Error{Code: code, Message: message, Cause: cause}
+	return &Error{Code: code, Message: message, cause: cause}
 }
 func InvalidArgument(message string) error  { return New(CodeInvalidArgument, message) }
 func Unauthenticated(message string) error  { return New(CodeUnauthenticated, message) }
