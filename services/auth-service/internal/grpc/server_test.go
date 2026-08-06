@@ -35,7 +35,7 @@ func TestStableErrors(t *testing.T) {
 	for _, x := range []struct {
 		e error
 		c codes.Code
-	}{{apperror.InvalidArgument("bad"), codes.InvalidArgument}, {apperror.Unauthenticated("bad"), codes.Unauthenticated}, {apperror.NotFound("bad"), codes.NotFound}, {apperror.Conflict("bad"), codes.AlreadyExists}, {service.ErrInvalidCredentials, codes.Internal}} {
+	}{{apperror.InvalidArgument("bad"), codes.InvalidArgument}, {apperror.Unauthenticated("bad"), codes.Unauthenticated}, {apperror.PermissionDenied("bad"), codes.PermissionDenied}, {apperror.NotFound("bad"), codes.NotFound}, {apperror.Conflict("bad"), codes.AlreadyExists}, {service.ErrInvalidCredentials, codes.Internal}} {
 		_, e := NewServer(fake{x.e}).Login(context.Background(), &authv1.LoginRequest{})
 		if status.Code(e) != x.c {
 			t.Fatalf("%v => %v", x.e, status.Code(e))

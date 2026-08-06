@@ -23,53 +23,56 @@ var (
 type AuthService struct {
 	users  repository.User
 	tokens repository.RefreshToken
+	uow    repository.UnitOfWork
 	tm     *TokenManager
 }
 
-func NewAuthService(u repository.User, t repository.RefreshToken, m *TokenManager) *AuthService {
-	return &AuthService{u, t, m}
+func NewAuthService(u repository.User, t repository.RefreshToken, uow repository.UnitOfWork, m *TokenManager) *AuthService {
+	return &AuthService{users: u, tokens: t, uow: uow, tm: m}
 }
-func (s *AuthService) issue(c context.Context, uid string) (TokenPair, error) {
-	p, h, e := s.tm.Issue(uid)
-	if e != nil {
-		return TokenPair{}, apperror.Internal("unable to issue token")
+func (s *AuthService) issue(uid string, now time.Time) (TokenPair, model.RefreshToken, error) {
+	pair, hash, err := s.tm.IssueAt(uid, now)
+	if err != nil {
+		return TokenPair{}, model.RefreshToken{}, apperror.Internal("unable to issue token")
 	}
-	if e = s.tokens.Create(c, &model.RefreshToken{ID: uuid.NewString(), UserID: uid, TokenHash: h, ExpiresAt: time.Now().Add(s.tm.refreshTTL)}); e != nil {
-		return TokenPair{}, apperror.Internal("unable to issue token")
-	}
-	return p, nil
+	return pair, model.RefreshToken{ID: uuid.NewString(), UserID: uid, TokenHash: hash, ExpiresAt: now.Add(s.tm.refreshTTL), CreatedAt: now}, nil
 }
 func (s *AuthService) Register(c context.Context, email, password string) (model.User, TokenPair, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if !validEmail(email) || len(password) < 8 || !strings.ContainsAny(password, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") || !strings.ContainsAny(password, "0123456789") {
 		return model.User{}, TokenPair{}, apperror.InvalidArgument("invalid email or password")
 	}
-	h, e := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if e != nil {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
 		return model.User{}, TokenPair{}, apperror.Internal("unable to create user")
 	}
-	u := model.User{ID: uuid.NewString(), Email: email, PasswordHash: string(h), CreatedAt: time.Now().UTC()}
-	if e = s.users.Create(c, &u); e != nil {
-		if errors.Is(e, gorm.ErrDuplicatedKey) {
+	now := s.tm.now().UTC()
+	u := model.User{ID: uuid.NewString(), Email: email, PasswordHash: string(hash), CreatedAt: now, UpdatedAt: now}
+	pair, token, err := s.issue(u.ID, now)
+	if err != nil {
+		return model.User{}, TokenPair{}, err
+	}
+	if err = s.uow.CreateUserWithRefreshToken(c, &u, &token); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return model.User{}, TokenPair{}, apperror.Conflict("email already registered")
 		}
 		return model.User{}, TokenPair{}, apperror.Internal("unable to create user")
 	}
-	p, e := s.issue(c, u.ID)
-	if e != nil {
-		return model.User{}, TokenPair{}, e
-	}
 	u.PasswordHash = ""
-	return u, p, nil
+	return u, pair, nil
 }
 func (s *AuthService) Login(c context.Context, email, password string) (model.User, TokenPair, error) {
 	u, e := s.users.ByEmail(c, strings.ToLower(strings.TrimSpace(email)))
 	if e != nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
 		return model.User{}, TokenPair{}, apperror.Unauthenticated("invalid credentials")
 	}
-	p, e := s.issue(c, u.ID)
+	now := s.tm.now().UTC()
+	p, token, e := s.issue(u.ID, now)
 	if e != nil {
 		return model.User{}, TokenPair{}, e
+	}
+	if e = s.tokens.Create(c, &token); e != nil {
+		return model.User{}, TokenPair{}, apperror.Internal("unable to issue token")
 	}
 	u.PasswordHash = ""
 	return u, p, nil
@@ -78,23 +81,26 @@ func (s *AuthService) Refresh(c context.Context, raw string) (TokenPair, error) 
 	if raw == "" {
 		return TokenPair{}, apperror.Unauthenticated("invalid refresh token")
 	}
-	p, h, e := s.tm.Issue("pending")
-	if e != nil {
-		return TokenPair{}, apperror.Internal("unable to issue token")
-	}
-	n := &model.RefreshToken{ID: uuid.NewString(), TokenHash: h, ExpiresAt: time.Now().Add(s.tm.refreshTTL)}
-	uid, e := s.tokens.Rotate(c, HashRefreshToken(raw), n, time.Now())
-	if e != nil {
+	now := s.tm.now().UTC()
+	var pair TokenPair
+	_, err := s.tokens.Rotate(c, HashRefreshToken(raw), now, func(uid string) (*model.RefreshToken, error) {
+		issued, token, issueErr := s.issue(uid, now)
+		if issueErr != nil {
+			return nil, issueErr
+		}
+		pair = issued
+		return &token, nil
+	})
+	if err != nil {
 		return TokenPair{}, apperror.Unauthenticated("invalid refresh token")
 	}
-	n.UserID = uid
-	return p, nil
+	return pair, nil
 }
 func (s *AuthService) Logout(c context.Context, raw string) error {
 	if raw == "" {
 		return apperror.InvalidArgument("refresh token is required")
 	}
-	if e := s.tokens.Revoke(c, HashRefreshToken(raw), time.Now()); e != nil {
+	if e := s.tokens.Revoke(c, HashRefreshToken(raw), s.tm.now().UTC()); e != nil {
 		return apperror.Unauthenticated("invalid refresh token")
 	}
 	return nil

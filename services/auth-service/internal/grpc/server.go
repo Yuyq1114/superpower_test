@@ -33,6 +33,8 @@ func mapErr(e error) error {
 		return status.Error(codes.InvalidArgument, e.Error())
 	case apperror.CodeUnauthenticated:
 		return status.Error(codes.Unauthenticated, e.Error())
+	case apperror.CodePermissionDenied:
+		return status.Error(codes.PermissionDenied, e.Error())
 	case apperror.CodeNotFound:
 		return status.Error(codes.NotFound, e.Error())
 	case apperror.CodeConflict:

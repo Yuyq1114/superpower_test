@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"github.com/example/fitness-checkin/pkg/apperror"
 	"github.com/example/fitness-checkin/services/auth-service/internal/model"
 	"gorm.io/gorm"
@@ -40,16 +41,20 @@ func (x *memTokens) Create(_ context.Context, t *model.RefreshToken) error {
 	x.m[t.TokenHash] = *t
 	return nil
 }
-func (x *memTokens) Rotate(_ context.Context, h string, n *model.RefreshToken, now time.Time) (string, error) {
+func (x *memTokens) Rotate(_ context.Context, h string, now time.Time, issue func(string) (*model.RefreshToken, error)) (model.RefreshToken, error) {
 	o, ok := x.m[h]
 	if !ok || o.RevokedAt != nil || !o.ExpiresAt.After(now) {
-		return "", gorm.ErrRecordNotFound
+		return model.RefreshToken{}, gorm.ErrRecordNotFound
+	}
+	n, err := issue(o.UserID)
+	if err != nil {
+		return model.RefreshToken{}, err
 	}
 	o.RevokedAt = &now
 	x.m[h] = o
 	n.UserID = o.UserID
 	x.m[n.TokenHash] = *n
-	return o.UserID, nil
+	return *n, nil
 }
 func (x *memTokens) Revoke(_ context.Context, h string, now time.Time) error {
 	o, ok := x.m[h]
@@ -60,10 +65,39 @@ func (x *memTokens) Revoke(_ context.Context, h string, now time.Time) error {
 	x.m[h] = o
 	return nil
 }
+
+type memUnitOfWork struct {
+	users  *memUsers
+	tokens *memTokens
+	fail   error
+}
+
+func (x memUnitOfWork) CreateUserWithRefreshToken(c context.Context, u *model.User, token *model.RefreshToken) error {
+	if x.fail != nil {
+		return x.fail
+	}
+	if err := x.users.Create(c, u); err != nil {
+		return err
+	}
+	return x.tokens.Create(c, token)
+}
+
+func TestRegisterTransactionFailureLeavesNoUser(t *testing.T) {
+	users := &memUsers{map[string]model.User{}}
+	tokens := &memTokens{map[string]model.RefreshToken{}}
+	s := NewAuthService(users, tokens, memUnitOfWork{users: users, tokens: tokens, fail: errors.New("token insert failed")}, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
+	if _, _, err := s.Register(context.Background(), "rollback@example.com", "ValidPass123"); apperror.CodeOf(err) != apperror.CodeInternal {
+		t.Fatalf("register: %v", err)
+	}
+	if len(users.m) != 0 || len(tokens.m) != 0 {
+		t.Fatalf("partial registration persisted")
+	}
+}
+
 func setup() *AuthService {
 	u := &memUsers{map[string]model.User{}}
 	r := &memTokens{map[string]model.RefreshToken{}}
-	return NewAuthService(u, r, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
+	return NewAuthService(u, r, memUnitOfWork{users: u, tokens: r}, NewTokenManager([]byte("0123456789abcdef0123456789abcdef"), time.Minute, time.Hour))
 }
 func TestRegisterLoginAndDuplicate(t *testing.T) {
 	s := setup()

@@ -24,7 +24,10 @@ func NewTokenManager(s []byte, a, r time.Duration) *TokenManager {
 	return &TokenManager{secret: s, accessTTL: a, refreshTTL: r, now: time.Now}
 }
 func (m *TokenManager) Issue(uid string) (TokenPair, string, error) {
-	now := m.now()
+	return m.IssueAt(uid, m.now().UTC())
+}
+
+func (m *TokenManager) IssueAt(uid string, now time.Time) (TokenPair, string, error) {
 	j := make([]byte, 16)
 	if _, e := rand.Read(j); e != nil {
 		return TokenPair{}, "", e
@@ -45,18 +48,29 @@ func HashRefreshToken(raw string) string {
 	h := sha256.Sum256([]byte(raw))
 	return base64.RawURLEncoding.EncodeToString(h[:])
 }
+
+type accessClaims struct {
+	Subject string `json:"sub"`
+	JWTID   string `json:"jti"`
+	jwt.RegisteredClaims
+}
+
 func (m *TokenManager) ParseAccess(raw string) (string, error) {
-	t, e := jwt.Parse(raw, func(t *jwt.Token) (any, error) {
+	claims := &accessClaims{}
+	token, err := jwt.ParseWithClaims(raw, claims, func(t *jwt.Token) (any, error) {
 		if t.Method != jwt.SigningMethodHS256 {
-			return nil, errors.New("algorithm")
+			return nil, errors.New("invalid signing algorithm")
 		}
 		return m.secret, nil
-	})
-	if e != nil || !t.Valid {
+	}, jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(m.now))
+	if err != nil || !token.Valid || claims.Subject == "" || claims.JWTID == "" || claims.IssuedAt == nil || claims.ExpiresAt == nil {
 		return "", errors.New("invalid token")
 	}
-	s, e := t.Claims.GetSubject()
-	return s, e
+	now := m.now()
+	if claims.IssuedAt.Time.After(now) || !claims.ExpiresAt.Time.After(claims.IssuedAt.Time) {
+		return "", errors.New("invalid token")
+	}
+	return claims.Subject, nil
 }
 func validEmail(e string) bool {
 	return strings.Contains(e, "@") && !strings.ContainsAny(e, " \t\n") && strings.LastIndex(e, ".") > strings.Index(e, "@")
