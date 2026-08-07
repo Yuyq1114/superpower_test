@@ -2,13 +2,18 @@ package clients
 
 import (
 	"context"
+	"fmt"
 	authv1 "github.com/example/fitness-checkin/proto/gen/auth/v1"
 	checkinv1 "github.com/example/fitness-checkin/proto/gen/checkin/v1"
 	planv1 "github.com/example/fitness-checkin/proto/gen/plan/v1"
 	profilev1 "github.com/example/fitness-checkin/proto/gen/profile/v1"
 	statisticsv1 "github.com/example/fitness-checkin/proto/gen/statistics/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 	"time"
 )
 
@@ -18,11 +23,13 @@ type Clients struct {
 	Checkin    checkinv1.CheckinServiceClient
 	Profile    profilev1.ProfileServiceClient
 	Statistics statisticsv1.StatisticsServiceClient
+	health     map[string]healthv1.HealthClient
+	states     map[string]*grpc.ClientConn
 	conns      []*grpc.ClientConn
 }
 
 func Dial(ctx context.Context, addresses map[string]string) (*Clients, error) {
-	c := &Clients{}
+	c := &Clients{health: map[string]healthv1.HealthClient{}, states: map[string]*grpc.ClientConn{}}
 	for name, addr := range addresses {
 		conn, e := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 		if e != nil {
@@ -30,6 +37,8 @@ func Dial(ctx context.Context, addresses map[string]string) (*Clients, error) {
 			return nil, e
 		}
 		c.conns = append(c.conns, conn)
+		c.health[name] = healthv1.NewHealthClient(conn)
+		c.states[name] = conn
 		switch name {
 		case "auth":
 			c.Auth = authv1.NewAuthServiceClient(conn)
@@ -44,6 +53,28 @@ func Dial(ctx context.Context, addresses map[string]string) (*Clients, error) {
 		}
 	}
 	return c, nil
+}
+func (c *Clients) Ready(ctx context.Context) error {
+	for _, name := range []string{"auth", "plan", "checkin", "profile", "statistics"} {
+		client := c.health[name]
+		if client == nil {
+			return fmt.Errorf("%s health client unavailable", name)
+		}
+		check, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		response, err := client.Check(check, &healthv1.HealthCheckRequest{})
+		cancel()
+		if status.Code(err) == codes.Unimplemented {
+			conn := c.states[name]
+			if conn == nil || conn.GetState() != connectivity.Ready {
+				return fmt.Errorf("%s not ready", name)
+			}
+			continue
+		}
+		if err != nil || response.GetStatus() != healthv1.HealthCheckResponse_SERVING {
+			return fmt.Errorf("%s not ready", name)
+		}
+	}
+	return nil
 }
 func (c *Clients) Close() {
 	for _, conn := range c.conns {

@@ -48,6 +48,9 @@ func main() {
 		os.Exit(1)
 	}
 }
+func productionDependencies(cs *gatewayclients.Clients, secret string, logger *slog.Logger) *gatewayhttp.Dependencies {
+	return &gatewayhttp.Dependencies{Clients: cs, JWTSecret: secret, Logger: logger, Ready: cs.Ready}
+}
 func run() error {
 	logger := observability.NewLogger("api-gateway", nil)
 	slog.SetDefault(logger)
@@ -66,7 +69,7 @@ func run() error {
 	defer cs.Close()
 	reg := observability.NewRegistry()
 	_ = observability.NewMetrics(reg)
-	router := gatewayhttp.NewRouter(&gatewayhttp.Dependencies{Clients: cs, JWTSecret: cfg.Secret, Logger: logger})
+	router := gatewayhttp.NewRouter(productionDependencies(cs, cfg.Secret, logger))
 	router.GET("/metrics", func(c *gin.Context) { promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(c.Writer, c.Request) })
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	fail := make(chan error, 1)
