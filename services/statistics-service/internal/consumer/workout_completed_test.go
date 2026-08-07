@@ -127,3 +127,83 @@ func TestMalformedPayloadRetriesAndDeadLetters(t *testing.T) {
 		t.Fatalf("dlq count = %d", len(dlq))
 	}
 }
+
+func TestDeadLetterAndAckIsIdempotentAcrossAmbiguousRetry(t *testing.T) {
+	c, r, _ := setupConsumer(t, func(context.Context, model.WorkoutCompleted) error { return errors.New("boom") })
+	id := addEvent(t, r, validValues())
+	_ = c.ReadOnce(context.Background())
+	values := cloneValues(validValues())
+	values["source_stream"], values["source_message_id"] = Stream, id
+	if err := c.deadLetterAndAck(context.Background(), id, values); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.deadLetterAndAck(context.Background(), id, values); err != nil {
+		t.Fatal(err)
+	}
+	dlq, err := r.XRange(context.Background(), DeadLetterStream, "-", "+").Result()
+	if err != nil || len(dlq) != 1 {
+		t.Fatalf("dlq=%#v err=%v", dlq, err)
+	}
+	pending, _ := r.XPending(context.Background(), Stream, Group).Result()
+	if pending.Count != 0 {
+		t.Fatalf("pending=%d", pending.Count)
+	}
+}
+
+func TestHandlerTimeoutLeavesPendingAndBatchContinues(t *testing.T) {
+	calls := 0
+	c, r, _ := setupConsumer(t, func(ctx context.Context, event model.WorkoutCompleted) error {
+		calls++
+		if event.EventID == "event-1" {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	})
+	c.ProcessTimeout = 10 * time.Millisecond
+	c.BatchSize = 2
+	addEvent(t, r, validValues())
+	second := validValues()
+	second["event_id"], second["checkin_id"] = "event-2", "checkin-2"
+	addEvent(t, r, second)
+	started := time.Now()
+	err := c.ReadOnce(context.Background())
+	if err == nil || time.Since(started) > time.Second {
+		t.Fatalf("err=%v elapsed=%s", err, time.Since(started))
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d", calls)
+	}
+	pending, _ := r.XPending(context.Background(), Stream, Group).Result()
+	if pending.Count != 1 {
+		t.Fatalf("pending=%d", pending.Count)
+	}
+}
+
+func TestRunBacksOffErrorsResetsAfterSuccessAndCancelsPromptly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	steps := []error{errors.New("redis down"), errors.New("redis down"), nil, errors.New("redis down")}
+	var sleeps []time.Duration
+	c := &Consumer{BackoffBase: 10 * time.Millisecond, BackoffMax: 40 * time.Millisecond, RandInt63n: func(int64) int64 { return 0 }}
+	c.RunStep = func(context.Context) error {
+		if len(steps) == 0 {
+			cancel()
+			return context.Canceled
+		}
+		e := steps[0]
+		steps = steps[1:]
+		return e
+	}
+	c.Sleep = func(ctx context.Context, d time.Duration) error { sleeps = append(sleeps, d); return nil }
+	_ = c.Run(ctx)
+	want := []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 10 * time.Millisecond}
+	if len(sleeps) != len(want) {
+		t.Fatalf("sleeps=%v", sleeps)
+	}
+	for i := range want {
+		if sleeps[i] != want[i] {
+			t.Fatalf("sleeps=%v", sleeps)
+		}
+	}
+}

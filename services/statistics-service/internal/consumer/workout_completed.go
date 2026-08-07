@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -23,21 +24,27 @@ type Handler interface {
 }
 
 type Consumer struct {
-	Redis      redis.UniversalClient
-	Handler    Handler
-	Name       string
-	Logger     *slog.Logger
-	MaxRetries int64
-	Block      time.Duration
-	BatchSize  int64
-	OnConsumed func()
-	OnRetry    func()
-	OnDLQ      func()
-	OnLag      func(int64)
+	Redis          redis.UniversalClient
+	Handler        Handler
+	Name           string
+	Logger         *slog.Logger
+	MaxRetries     int64
+	Block          time.Duration
+	BatchSize      int64
+	OnConsumed     func()
+	OnRetry        func()
+	OnDLQ          func()
+	OnLag          func(int64)
+	ProcessTimeout time.Duration
+	BackoffBase    time.Duration
+	BackoffMax     time.Duration
+	Sleep          func(context.Context, time.Duration) error
+	RandInt63n     func(int64) int64
+	RunStep        func(context.Context) error
 }
 
 func New(r redis.UniversalClient, h Handler, name string) *Consumer {
-	return &Consumer{Redis: r, Handler: h, Name: name, MaxRetries: 5, Block: time.Second, BatchSize: 10}
+	return &Consumer{Redis: r, Handler: h, Name: name, MaxRetries: 5, Block: time.Second, BatchSize: 10, ProcessTimeout: 30 * time.Second, BackoffBase: 100 * time.Millisecond, BackoffMax: 5 * time.Second, RandInt63n: rand.Int63n}
 }
 
 func (c *Consumer) EnsureGroup(ctx context.Context) error {
@@ -49,23 +56,73 @@ func (c *Consumer) EnsureGroup(ctx context.Context) error {
 }
 
 func (c *Consumer) Run(ctx context.Context) error {
+	attempt := 0
+	for ctx.Err() == nil {
+		var err error
+		if c.RunStep != nil {
+			err = c.RunStep(ctx)
+		} else {
+			err = c.runStep(ctx)
+		}
+		if err == nil || errors.Is(err, redis.Nil) {
+			attempt = 0
+			continue
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		c.log("consumer iteration failed", err, "")
+		if err = c.sleep(ctx, c.backoff(attempt)); err != nil {
+			return err
+		}
+		attempt++
+	}
+	return ctx.Err()
+}
+
+func (c *Consumer) runStep(ctx context.Context) error {
 	if err := c.EnsureGroup(ctx); err != nil {
 		return err
 	}
-	if err := c.ClaimOnce(ctx, 30*time.Second); err != nil && ctx.Err() == nil {
-		c.log("pending recovery failed", err, "")
+	if err := c.ClaimOnce(ctx, 30*time.Second); err != nil {
+		return err
 	}
-	for ctx.Err() == nil {
-		if err := c.ReadOnce(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, redis.Nil) {
-			c.log("event processing failed", err, "")
-		}
-		if err := c.ClaimOnce(ctx, 30*time.Second); err != nil && ctx.Err() == nil {
-			c.log("pending retry failed", err, "")
-		}
-	}
-	return nil
+	return c.ReadOnce(ctx)
 }
 
+func (c *Consumer) backoff(attempt int) time.Duration {
+	d := c.BackoffBase
+	if d <= 0 {
+		d = 100 * time.Millisecond
+	}
+	max := c.BackoffMax
+	if max <= 0 {
+		max = 5 * time.Second
+	}
+	for i := 0; i < attempt && d < max; i++ {
+		d *= 2
+	}
+	if d > max {
+		d = max
+	}
+	if c.RandInt63n != nil {
+		d += time.Duration(c.RandInt63n(int64(d/2) + 1))
+	}
+	return d
+}
+func (c *Consumer) sleep(ctx context.Context, d time.Duration) error {
+	if c.Sleep != nil {
+		return c.Sleep(ctx, d)
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 func (c *Consumer) ReadOnce(ctx context.Context) error {
 	streams, err := c.Redis.XReadGroup(ctx, &redis.XReadGroupArgs{Group: Group, Consumer: c.Name, Streams: []string{Stream, ">"}, Count: c.batch(), Block: c.Block}).Result()
 	if err != nil {
@@ -113,7 +170,9 @@ func (c *Consumer) process(ctx context.Context, msg redis.XMessage) error {
 	if parseErr != nil {
 		err = parseErr
 	} else {
-		err = c.Handler.ConsumeWorkoutCompleted(ctx, event)
+		processCtx, cancel := context.WithTimeout(ctx, c.processTimeout())
+		err = c.Handler.ConsumeWorkoutCompleted(processCtx, event)
+		cancel()
 	}
 	if err == nil {
 		if ackErr := c.Redis.XAck(ctx, Stream, Group, msg.ID).Err(); ackErr != nil {
@@ -135,11 +194,8 @@ func (c *Consumer) process(ctx context.Context, msg redis.XMessage) error {
 		values["delivery_count"] = deliveries
 		values["dead_letter_reason"] = err.Error()
 		values["dead_lettered_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-		if dlqErr := c.Redis.XAdd(ctx, &redis.XAddArgs{Stream: DeadLetterStream, Values: values}).Err(); dlqErr != nil {
-			return fmt.Errorf("process event: %w; DLQ: %v", err, dlqErr)
-		}
-		if ackErr := c.Redis.XAck(ctx, Stream, Group, msg.ID).Err(); ackErr != nil {
-			return fmt.Errorf("DLQ written but ACK failed: %w", ackErr)
+		if dlqErr := c.deadLetterAndAck(ctx, msg.ID, values); dlqErr != nil {
+			return fmt.Errorf("process event: %w; DLQ/ACK: %v", err, dlqErr)
 		}
 		if c.OnDLQ != nil {
 			c.OnDLQ()
@@ -153,6 +209,32 @@ func (c *Consumer) process(ctx context.Context, msg redis.XMessage) error {
 	return err
 }
 
+func (c *Consumer) processTimeout() time.Duration {
+	if c.ProcessTimeout <= 0 {
+		return 30 * time.Second
+	}
+	return c.ProcessTimeout
+}
+
+var deadLetterAndAckScript = redis.NewScript(`
+local added = redis.call('SETNX', KEYS[1], '1')
+if added == 1 then
+  redis.call('XADD', KEYS[2], '*', unpack(ARGV, 1, #ARGV - 2))
+end
+redis.call('XACK', KEYS[3], ARGV[#ARGV - 1], ARGV[#ARGV])
+return added
+`)
+
+func (c *Consumer) deadLetterAndAck(ctx context.Context, id string, values map[string]any) error {
+	args := make([]any, 0, len(values)*2+3)
+	for key, value := range values {
+		args = append(args, key, value)
+	}
+	args = append(args, Group, id)
+	dedupeKey := "{statistics}:dead-letter:" + Stream + ":" + id
+	_, err := deadLetterAndAckScript.Run(ctx, c.Redis, []string{dedupeKey, DeadLetterStream, Stream}, args...).Result()
+	return err
+}
 func (c *Consumer) reportLag(ctx context.Context) {
 	if c.OnLag == nil {
 		return

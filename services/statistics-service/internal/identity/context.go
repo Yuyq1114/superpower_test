@@ -17,6 +17,18 @@ type key struct{}
 
 var correlationID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
+func WithRequestContext(ctx context.Context) context.Context {
+	md, _ := metadata.FromIncomingContext(ctx)
+	trace, request := "", ""
+	if x := md.Get("x-trace-id"); len(x) == 1 {
+		trace = x[0]
+	}
+	if x := md.Get("x-request-id"); len(x) == 1 {
+		request = x[0]
+	}
+	return WithTrusted(ctx, "", trace, request)
+}
+
 func WithTrusted(ctx context.Context, u, t, r string) context.Context {
 	if !correlationID.MatchString(t) {
 		t = uuid.NewString()
@@ -24,11 +36,18 @@ func WithTrusted(ctx context.Context, u, t, r string) context.Context {
 	if !correlationID.MatchString(r) {
 		r = uuid.NewString()
 	}
-	return context.WithValue(ctx, key{}, trusted{u, t, r})
+	if current, ok := ctx.Value(key{}).(*trusted); ok {
+		current.UserID, current.TraceID, current.RequestID = u, t, r
+		return ctx
+	}
+	return context.WithValue(ctx, key{}, &trusted{u, t, r})
 }
 func FromContext(ctx context.Context) (string, string, string, bool) {
-	v, ok := ctx.Value(key{}).(trusted)
-	return v.UserID, v.TraceID, v.RequestID, ok && v.UserID != ""
+	v, ok := ctx.Value(key{}).(*trusted)
+	if !ok || v == nil {
+		return "", "", "", false
+	}
+	return v.UserID, v.TraceID, v.RequestID, v.UserID != ""
 }
 func UnaryServerInterceptor(secret string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
