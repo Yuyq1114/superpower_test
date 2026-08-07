@@ -44,6 +44,9 @@ func UnaryServerInterceptor(secret string) grpc.UnaryServerInterceptor {
 		if e != nil {
 			return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 		}
+		if identified, ok := req.(interface{ GetUserId() string }); ok && identified.GetUserId() != u {
+			return nil, status.Error(codes.PermissionDenied, "permission denied")
+		}
 		trace, request := "", ""
 		if x := md.Get("x-trace-id"); len(x) == 1 && correlationID.MatchString(x[0]) {
 			trace = x[0]

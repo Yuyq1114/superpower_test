@@ -23,7 +23,6 @@ type Clients struct {
 	Profile    profilev1.ProfileServiceClient
 	Statistics statisticsv1.StatisticsServiceClient
 	health     map[string]healthv1.HealthClient
-	states     map[string]*grpc.ClientConn
 	conns      []*grpc.ClientConn
 }
 
@@ -37,7 +36,6 @@ func Dial(ctx context.Context, addresses map[string]string) (*Clients, error) {
 		}
 		c.conns = append(c.conns, conn)
 		c.health[name] = healthv1.NewHealthClient(conn)
-		c.states[name] = conn
 		switch name {
 		case "auth":
 			c.Auth = authv1.NewAuthServiceClient(conn)

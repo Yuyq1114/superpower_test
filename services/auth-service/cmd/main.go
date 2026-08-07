@@ -76,12 +76,8 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 	hs := &http.Server{Addr: fmt.Sprintf(":%d", cfg.HTTPPort), Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
-	go func() {
-		if e := gs.Serve(lis); e != nil {
-			logger.Error("grpc stopped", "error", e)
-			cancel()
-		}
-	}()
+	go serveGRPC(ctx, gs, lis, health, logger, cancel)
+
 	go func() {
 		if e := hs.ListenAndServe(); e != nil && !errors.Is(e, http.ErrServerClosed) {
 			logger.Error("http stopped", "error", e)

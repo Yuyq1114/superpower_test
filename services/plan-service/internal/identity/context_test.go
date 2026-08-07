@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	planv1 "github.com/example/fitness-checkin/proto/gen/plan/v1"
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -60,5 +61,25 @@ func TestHealthCheckBypassesUserAuthentication(t *testing.T) {
 	_, err := UnaryServerInterceptor("secret")(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"}, func(context.Context, any) (any, error) { called = true; return nil, nil })
 	if err != nil || !called {
 		t.Fatalf("health check rejected: %v", err)
+	}
+}
+func TestRejectsRequestUserDifferentFromJWTSubject(t *testing.T) {
+	raw := token(t, "secret", "user-a", "jti")
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+raw))
+	req := &planv1.DeletePlanRequest{UserId: "user-b", PlanId: "p"}
+	called := false
+	_, err := UnaryServerInterceptor("secret")(ctx, req, &grpc.UnaryServerInfo{FullMethod: "/plan.v1.PlanService/DeletePlan"}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+	if status.Code(err) != codes.PermissionDenied || called {
+		t.Fatalf("err=%v called=%v", err, called)
+	}
+}
+func TestAllPlanRequestsEnforceUserMatch(t *testing.T) {
+	requests := []interface{ GetUserId() string }{&planv1.CreatePlanRequest{UserId: "other"}, &planv1.GetPlanRequest{UserId: "other"}, &planv1.UpdatePlanRequest{UserId: "other"}, &planv1.DeletePlanRequest{UserId: "other"}, &planv1.ListPlansRequest{UserId: "other"}, &planv1.AddWorkoutDayRequest{UserId: "other"}, &planv1.UpdateWorkoutDayRequest{UserId: "other"}, &planv1.DeleteWorkoutDayRequest{UserId: "other"}, &planv1.GetWorkoutDayRequest{UserId: "other"}, &planv1.ListWorkoutDaysRequest{UserId: "other"}, &planv1.AddWorkoutItemRequest{UserId: "other"}, &planv1.UpdateWorkoutItemRequest{UserId: "other"}, &planv1.DeleteWorkoutItemRequest{UserId: "other"}, &planv1.GetWorkoutItemRequest{UserId: "other"}, &planv1.ListWorkoutItemsRequest{UserId: "other"}}
+	for _, req := range requests {
+		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token(t, "secret", "trusted", "j")))
+		_, err := UnaryServerInterceptor("secret")(ctx, req, &grpc.UnaryServerInfo{FullMethod: "/plan.v1.PlanService/Test"}, func(context.Context, any) (any, error) { t.Fatal("mismatch propagated"); return nil, nil })
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("%T err=%v", req, err)
+		}
 	}
 }

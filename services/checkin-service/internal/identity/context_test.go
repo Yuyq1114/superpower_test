@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	checkinv1 "github.com/example/fitness-checkin/proto/gen/checkin/v1"
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -60,5 +61,25 @@ func TestHealthCheckBypassesUserAuthentication(t *testing.T) {
 	_, err := UnaryServerInterceptor("secret")(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"}, func(context.Context, any) (any, error) { called = true; return nil, nil })
 	if err != nil || !called {
 		t.Fatalf("health check rejected: %v", err)
+	}
+}
+func TestRejectsRequestUserDifferentFromJWTSubject(t *testing.T) {
+	raw := token(t, "secret", "user-a", "jti")
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+raw))
+	req := &checkinv1.ListHistoryRequest{UserId: "user-b"}
+	called := false
+	_, err := UnaryServerInterceptor("secret")(ctx, req, &grpc.UnaryServerInfo{FullMethod: "/checkin.v1.CheckinService/ListHistory"}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+	if status.Code(err) != codes.PermissionDenied || called {
+		t.Fatalf("err=%v called=%v", err, called)
+	}
+}
+func TestAllCheckinRequestsEnforceUserMatch(t *testing.T) {
+	requests := []interface{ GetUserId() string }{&checkinv1.CompleteRequest{UserId: "other"}, &checkinv1.ListHistoryRequest{UserId: "other"}}
+	for _, req := range requests {
+		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token(t, "secret", "trusted", "j")))
+		_, err := UnaryServerInterceptor("secret")(ctx, req, &grpc.UnaryServerInfo{FullMethod: "/checkin.v1.CheckinService/Test"}, func(context.Context, any) (any, error) { t.Fatal("mismatch propagated"); return nil, nil })
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("%T err=%v", req, err)
+		}
 	}
 }
