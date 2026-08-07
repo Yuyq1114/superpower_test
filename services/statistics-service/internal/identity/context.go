@@ -51,6 +51,9 @@ func FromContext(ctx context.Context) (string, string, string, bool) {
 }
 func UnaryServerInterceptor(secret string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		if strings.HasPrefix(info.FullMethod, "/grpc.health.v1.Health/") {
+			return h(ctx, req)
+		}
 		md, _ := metadata.FromIncomingContext(ctx)
 		a := md.Get("authorization")
 		if len(a) != 1 || !strings.HasPrefix(a[0], "Bearer ") {

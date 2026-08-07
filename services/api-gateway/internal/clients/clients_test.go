@@ -41,7 +41,7 @@ func TestReadyChecksEveryRequiredService(t *testing.T) {
 		t.Fatal("expected non-serving dependency to fail readiness")
 	}
 }
-func TestReadyFallsBackToConnectedTransportWhenHealthIsUnimplemented(t *testing.T) {
+func TestReadyRejectsUnimplementedHealth(t *testing.T) {
 	lis := bufconn.Listen(1 << 20)
 	s := grpc.NewServer()
 	go s.Serve(lis)
@@ -54,12 +54,11 @@ func TestReadyFallsBackToConnectedTransportWhenHealthIsUnimplemented(t *testing.
 	}
 	t.Cleanup(func() { conn.Close() })
 	h := healthv1.NewHealthClient(conn)
-	c := &Clients{health: map[string]healthv1.HealthClient{}, states: map[string]*grpc.ClientConn{}}
-	for _, name := range []string{"auth", "plan", "checkin", "profile", "statistics"} {
+	c := &Clients{health: map[string]healthv1.HealthClient{}}
+	for _, name := range requiredServices {
 		c.health[name] = h
-		c.states[name] = conn
 	}
-	if err := c.Ready(context.Background()); err != nil {
-		t.Fatalf("connected transport should be ready when health is unimplemented: %v", err)
+	if err := c.Ready(context.Background()); err == nil {
+		t.Fatal("unimplemented health must not be ready")
 	}
 }

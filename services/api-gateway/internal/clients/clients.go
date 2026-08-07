@@ -9,13 +9,12 @@ import (
 	profilev1 "github.com/example/fitness-checkin/proto/gen/profile/v1"
 	statisticsv1 "github.com/example/fitness-checkin/proto/gen/statistics/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/status"
 	"time"
 )
+
+var requiredServices = []string{"auth", "plan", "checkin", "profile", "statistics"}
 
 type Clients struct {
 	Auth       authv1.AuthServiceClient
@@ -29,7 +28,7 @@ type Clients struct {
 }
 
 func Dial(ctx context.Context, addresses map[string]string) (*Clients, error) {
-	c := &Clients{health: map[string]healthv1.HealthClient{}, states: map[string]*grpc.ClientConn{}}
+	c := &Clients{health: map[string]healthv1.HealthClient{}}
 	for name, addr := range addresses {
 		conn, e := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
 		if e != nil {
@@ -55,23 +54,27 @@ func Dial(ctx context.Context, addresses map[string]string) (*Clients, error) {
 	return c, nil
 }
 func (c *Clients) Ready(ctx context.Context) error {
-	for _, name := range []string{"auth", "plan", "checkin", "profile", "statistics"} {
+	budget, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	results := make(chan error, len(requiredServices))
+	for _, name := range requiredServices {
 		client := c.health[name]
-		if client == nil {
-			return fmt.Errorf("%s health client unavailable", name)
-		}
-		check, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		response, err := client.Check(check, &healthv1.HealthCheckRequest{})
-		cancel()
-		if status.Code(err) == codes.Unimplemented {
-			conn := c.states[name]
-			if conn == nil || conn.GetState() != connectivity.Ready {
-				return fmt.Errorf("%s not ready", name)
+		go func(name string, client healthv1.HealthClient) {
+			if client == nil {
+				results <- fmt.Errorf("%s health client unavailable", name)
+				return
 			}
-			continue
-		}
-		if err != nil || response.GetStatus() != healthv1.HealthCheckResponse_SERVING {
-			return fmt.Errorf("%s not ready", name)
+			response, err := client.Check(budget, &healthv1.HealthCheckRequest{})
+			if err != nil || response.GetStatus() != healthv1.HealthCheckResponse_SERVING {
+				results <- fmt.Errorf("%s not ready", name)
+				return
+			}
+			results <- nil
+		}(name, client)
+	}
+	for range requiredServices {
+		if err := <-results; err != nil {
+			return err
 		}
 	}
 	return nil

@@ -113,7 +113,7 @@ func TestPublicAuthPropagatesCorrelationWithoutAuthorization(t *testing.T) {
 func TestCreatePlanUsesTrustedIdentityAndNoTokenMetadata(t *testing.T) {
 	p := planStub{create: func(c context.Context, r *planv1.CreatePlanRequest) (*planv1.PlanResponse, error) {
 		m := md(t, c)
-		if r.UserId != "trusted-user" || len(m.Get("authorization")) != 0 || m.Get("user-id")[0] != "trusted-user" {
+		if r.UserId != "trusted-user" || len(m.Get("authorization")) != 1 || !strings.HasPrefix(m.Get("authorization")[0], "Bearer ") {
 			t.Fatalf("request=%+v md=%v", r, m)
 		}
 		return &planv1.PlanResponse{Plan: &planv1.Plan{Id: "p1", UserId: r.UserId, Name: r.Name}}, nil

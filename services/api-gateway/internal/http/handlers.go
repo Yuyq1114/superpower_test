@@ -151,7 +151,7 @@ func (h *handler) publicContext(c *gin.Context) (context.Context, context.Cancel
 	return clients.CallContext(ctx)
 }
 func (h *handler) grpcContext(c *gin.Context) (context.Context, context.CancelFunc) {
-	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs("user-id", uid(c), "x-request-id", requestID(c), "x-trace-id", c.GetString("trace_id")))
+	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs("authorization", c.GetHeader("Authorization"), "x-request-id", requestID(c), "x-trace-id", c.GetString("trace_id")))
 	return clients.CallContext(ctx)
 }
 func (h *handler) fail(c *gin.Context, e error) {

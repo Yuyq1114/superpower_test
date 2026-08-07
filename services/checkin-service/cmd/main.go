@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"github.com/example/fitness-checkin/pkg/config"
 	"github.com/example/fitness-checkin/pkg/observability"
+	"github.com/example/fitness-checkin/pkg/servicehealth"
 	"github.com/example/fitness-checkin/pkg/storage"
 	checkinv1 "github.com/example/fitness-checkin/proto/gen/checkin/v1"
 	planv1 "github.com/example/fitness-checkin/proto/gen/plan/v1"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/events"
 	checkingrpc "github.com/example/fitness-checkin/services/checkin-service/internal/grpc"
+	"github.com/example/fitness-checkin/services/checkin-service/internal/identity"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/repository"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/service"
 	"github.com/google/uuid"
@@ -18,7 +20,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,6 +35,9 @@ import (
 type planChecker struct{ client planv1.PlanServiceClient }
 
 func (p planChecker) CheckWorkoutItem(ctx context.Context, u, i string) error {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		ctx = metadata.NewOutgoingContext(ctx, md.Copy())
+	}
 	_, e := p.client.GetWorkoutItem(ctx, &planv1.GetWorkoutItemRequest{UserId: u, WorkoutItemId: i})
 	return e
 }
@@ -77,8 +84,19 @@ func main() {
 	failed := prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_outbox_failed_total", Help: "Failed outbox publishes."})
 	retried := prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_outbox_retried_total", Help: "Retried outbox events."})
 	reg.MustRegister(published, failed, retried)
-	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(deadlineInterceptor(5*time.Second), metricsInterceptor(m, logger)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20))
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadlineInterceptor(5*time.Second), metricsInterceptor(m, logger)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20))
 	checkinv1.RegisterCheckinServiceServer(gs, checkingrpc.NewServer(service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema}, planChecker{client: planv1.NewPlanServiceClient(pc)})))
+	sqlDB, _ := db.DB()
+	health := servicehealth.New(func(c context.Context) error {
+		x, cancel := context.WithTimeout(c, 500*time.Millisecond)
+		defer cancel()
+		return sqlDB.PingContext(x)
+	}, func(c context.Context) error {
+		x, cancel := context.WithTimeout(c, 500*time.Millisecond)
+		defer cancel()
+		return red.Ping(x).Err()
+	})
+	healthv1.RegisterHealthServer(gs, health)
 	pub := &events.Publisher{Logger: logger, Published: published.Inc, Failed: failed.Inc, Retried: retried.Inc, Repo: repository.GORM{DB: db, Schema: repository.DefaultSchema}, Redis: red}
 	go func() {
 		t := time.NewTicker(2 * time.Second)
@@ -111,7 +129,14 @@ func main() {
 		w.WriteHeader(200)
 	})
 	hs := &http.Server{Addr: fmt.Sprintf(":%d", cfg.HTTPPort), Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
-	go gs.Serve(lis)
+	health.SetServing(true)
+	go func() {
+		if err := gs.Serve(lis); err != nil && ctx.Err() == nil {
+			health.SetServing(false)
+			logger.Error("grpc stopped", "error", err)
+			cancel()
+		}
+	}()
 	go func() {
 		if x := hs.ListenAndServe(); x != nil && !errors.Is(x, http.ErrServerClosed) {
 			logger.Error("http stopped", "error", x)

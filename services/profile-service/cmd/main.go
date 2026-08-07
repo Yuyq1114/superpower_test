@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/example/fitness-checkin/pkg/config"
 	"github.com/example/fitness-checkin/pkg/observability"
+	"github.com/example/fitness-checkin/pkg/servicehealth"
 	"github.com/example/fitness-checkin/pkg/storage"
 	profilev1 "github.com/example/fitness-checkin/proto/gen/profile/v1"
 	profilgrpc "github.com/example/fitness-checkin/services/profile-service/internal/grpc"
@@ -14,6 +15,7 @@ import (
 	"github.com/example/fitness-checkin/services/profile-service/internal/service"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"log/slog"
 	"net"
@@ -55,6 +57,16 @@ func main() {
 	state := &servingState{}
 	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadlineInterceptor(5*time.Second), metricsInterceptor(m, logger)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}))
 	profilev1.RegisterProfileServiceServer(gs, profilgrpc.NewServer(service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema})))
+	sqlDB, _ := db.DB()
+	health := servicehealth.New(func(c context.Context) error {
+		if !state.Ready() {
+			return errors.New("grpc not serving")
+		}
+		x, cancel := context.WithTimeout(c, 500*time.Millisecond)
+		defer cancel()
+		return sqlDB.PingContext(x)
+	})
+	healthv1.RegisterHealthServer(gs, health)
 	lis, e := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if e != nil {
 		logger.Error("listen failed", "error", e)
@@ -72,6 +84,7 @@ func main() {
 		w.WriteHeader(200)
 	})
 	hs := &http.Server{Addr: fmt.Sprintf(":%d", cfg.HTTPPort), Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	health.SetServing(true)
 	go serveGRPC(ctx, gs, lis, state, logger, cancel)
 	go func() {
 		if x := hs.ListenAndServe(); x != nil && !errors.Is(x, http.ErrServerClosed) {

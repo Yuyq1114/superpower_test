@@ -6,14 +6,17 @@ import (
 	"fmt"
 	"github.com/example/fitness-checkin/pkg/config"
 	"github.com/example/fitness-checkin/pkg/observability"
+	"github.com/example/fitness-checkin/pkg/servicehealth"
 	"github.com/example/fitness-checkin/pkg/storage"
 	planv1 "github.com/example/fitness-checkin/proto/gen/plan/v1"
 	plangrpc "github.com/example/fitness-checkin/services/plan-service/internal/grpc"
+	"github.com/example/fitness-checkin/services/plan-service/internal/identity"
 	"github.com/example/fitness-checkin/services/plan-service/internal/repository"
 	"github.com/example/fitness-checkin/services/plan-service/internal/service"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"log/slog"
@@ -48,8 +51,15 @@ func main() {
 	}
 	reg := observability.NewRegistry()
 	m := observability.NewMetrics(reg)
-	gs := grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: false}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20), grpc.ChainUnaryInterceptor(deadline(5*time.Second), requestLogger(logger), metrics(m)))
+	gs := grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: false}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20), grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadline(5*time.Second), requestLogger(logger), metrics(m)))
 	planv1.RegisterPlanServiceServer(gs, plangrpc.NewServer(service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema})))
+	sqlDB, _ := db.DB()
+	health := servicehealth.New(func(c context.Context) error {
+		x, cancel := context.WithTimeout(c, 500*time.Millisecond)
+		defer cancel()
+		return sqlDB.PingContext(x)
+	})
+	healthv1.RegisterHealthServer(gs, health)
 	lis, e := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if e != nil {
 		logger.Error("listen failed", "error", e)
@@ -59,8 +69,7 @@ func main() {
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		sql, e := db.DB()
-		if e != nil || sql.PingContext(r.Context()) != nil {
+		if sqlDB == nil || !health.Serving(r.Context()) {
 			http.Error(w, "not ready", 503)
 			return
 		}

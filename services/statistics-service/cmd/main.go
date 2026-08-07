@@ -14,6 +14,7 @@ import (
 
 	"github.com/example/fitness-checkin/pkg/config"
 	"github.com/example/fitness-checkin/pkg/observability"
+	"github.com/example/fitness-checkin/pkg/servicehealth"
 	"github.com/example/fitness-checkin/pkg/storage"
 	statisticsv1 "github.com/example/fitness-checkin/proto/gen/statistics/v1"
 	"github.com/example/fitness-checkin/services/statistics-service/internal/consumer"
@@ -25,6 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -95,6 +97,17 @@ func run() error {
 	}
 	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(metricsInterceptor(m, logger), deadlineInterceptor(5*time.Second), identity.UnaryServerInterceptor(cfg.JWTSecret)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}))
 	statisticsv1.RegisterStatisticsServiceServer(gs, statisticsgrpc.NewServer(svc))
+	sqlDB, _ := db.DB()
+	health := servicehealth.New(func(c context.Context) error {
+		x, cancel := context.WithTimeout(c, 500*time.Millisecond)
+		defer cancel()
+		return sqlDB.PingContext(x)
+	}, func(c context.Context) error {
+		x, cancel := context.WithTimeout(c, 500*time.Millisecond)
+		defer cancel()
+		return rdb.Ping(x).Err()
+	})
+	healthv1.RegisterHealthServer(gs, health)
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {
 		return fmt.Errorf("listen grpc: %w", err)
@@ -112,13 +125,16 @@ func run() error {
 	})
 	hs := &http.Server{Addr: fmt.Sprintf(":%d", cfg.HTTPPort), Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
 	failures := make(chan error, 3)
+	health.SetServing(true)
 	go func() {
 		if e := c.Run(ctx); e != nil && ctx.Err() == nil {
+			health.SetServing(false)
 			failures <- fmt.Errorf("consumer: %w", e)
 		}
 	}()
 	go func() {
 		if e := gs.Serve(lis); e != nil && ctx.Err() == nil {
+			health.SetServing(false)
 			failures <- fmt.Errorf("grpc: %w", e)
 		}
 	}()
@@ -128,6 +144,7 @@ func run() error {
 		}
 	}()
 	runtimeErr := waitForStop(ctx, failures)
+	health.SetServing(false)
 	cancel()
 	shutdown, done := context.WithTimeout(context.Background(), 5*time.Second)
 	defer done()

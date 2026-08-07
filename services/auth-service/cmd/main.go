@@ -14,6 +14,7 @@ import (
 
 	"github.com/example/fitness-checkin/pkg/config"
 	"github.com/example/fitness-checkin/pkg/observability"
+	"github.com/example/fitness-checkin/pkg/servicehealth"
 	"github.com/example/fitness-checkin/pkg/storage"
 	authv1 "github.com/example/fitness-checkin/proto/gen/auth/v1"
 	authgrpc "github.com/example/fitness-checkin/services/auth-service/internal/grpc"
@@ -21,6 +22,7 @@ import (
 	"github.com/example/fitness-checkin/services/auth-service/internal/service"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -51,6 +53,13 @@ func main() {
 	metrics := observability.NewMetrics(reg)
 	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(defaultDeadlineInterceptor(5*time.Second), requestLogger(logger), metricsInterceptor(metrics)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Hour, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: true}))
 	authv1.RegisterAuthServiceServer(gs, authgrpc.NewServer(svc))
+	sqlDB, _ := db.DB()
+	health := servicehealth.New(func(c context.Context) error {
+		x, cancel := context.WithTimeout(c, 500*time.Millisecond)
+		defer cancel()
+		return sqlDB.PingContext(x)
+	})
+	healthv1.RegisterHealthServer(gs, health)
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {
 		logger.Error("listen failed", "error", err)
@@ -60,8 +69,7 @@ func main() {
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		c, e := db.DB()
-		if e != nil || c.PingContext(r.Context()) != nil {
+		if sqlDB == nil || !health.Serving(r.Context()) {
 			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}

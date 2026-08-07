@@ -54,3 +54,11 @@ func TestInvalidCorrelationIDsAreRegenerated(t *testing.T) {
 		t.Fatal("invalid correlation ID accepted")
 	}
 }
+
+func TestHealthCheckBypassesUserAuthentication(t *testing.T) {
+	called := false
+	_, err := UnaryServerInterceptor("secret")(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+	if err != nil || !called {
+		t.Fatalf("health check rejected: %v", err)
+	}
+}
