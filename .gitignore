@@ -9,4 +9,5 @@
 .env
 .env.*
 !.env.example
-`n
+
+deploy/k8s/dev/secret.env

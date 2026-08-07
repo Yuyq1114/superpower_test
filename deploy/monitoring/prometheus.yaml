@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: fitness-services
+        metrics_path: /metrics
+        static_configs:
+          - targets:
+              - api-gateway:8080
+              - auth-service:8080
+              - plan-service:8080
+              - checkin-service:8080
+              - profile-service:8080
+              - statistics-service:8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: prometheus}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: prometheus, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, fsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.5.0
+          args: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.path=/prometheus]
+          ports: [{name: http, containerPort: 9090}]
+          volumeMounts: [{name: config, mountPath: /etc/prometheus, readOnly: true}, {name: data, mountPath: /prometheus}]
+          readinessProbe: {httpGet: {path: /-/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /-/healthy, port: http}, periodSeconds: 10}
+          resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+      volumes: [{name: config, configMap: {name: prometheus-config}}, {name: data, emptyDir: {sizeLimit: 1Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prometheus}
+spec:
+  selector: {app.kubernetes.io/name: prometheus}
+  ports: [{name: http, port: 9090, targetPort: http}]

@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fitness-config
+data:
+  HTTP_PORT: "8080"
+  GRPC_PORT: "9090"
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_NAME: fitness
+  REDIS_ADDR: redis:6379
+  AUTH_GRPC_ADDR: auth-service:9090
+  PLAN_GRPC_ADDR: plan-service:9090
+  CHECKIN_GRPC_ADDR: checkin-service:9090
+  PROFILE_GRPC_ADDR: profile-service:9090
+  STATISTICS_GRPC_ADDR: statistics-service:9090
+  PLAN_SERVICE_ADDR: plan-service:9090
+  REQUEST_TIMEOUT: 5s
+  AUTH_DB_USER: auth_service
+  AUTH_DB_SCHEMA: auth_schema
+  PLAN_DB_USER: plan_service
+  PLAN_DB_SCHEMA: plan_schema
+  CHECKIN_DB_USER: checkin_service
+  CHECKIN_DB_SCHEMA: checkin_schema
+  PROFILE_DB_USER: profile_service
+  PROFILE_DB_SCHEMA: profile_schema
+  STATISTICS_DB_USER: statistics_service
+  STATISTICS_DB_SCHEMA: statistics_schema
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    app.kubernetes.io/name: postgres
+data:
+  001-init.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 -v auth_password="$AUTH_DB_PASSWORD" -v plan_password="$PLAN_DB_PASSWORD" -v checkin_password="$CHECKIN_DB_PASSWORD" -v profile_password="$PROFILE_DB_PASSWORD" -v statistics_password="$STATISTICS_DB_PASSWORD" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-'SQL'
+      CREATE ROLE auth_service LOGIN PASSWORD '${AUTH_DB_PASSWORD}';
+      CREATE ROLE plan_service LOGIN PASSWORD '${PLAN_DB_PASSWORD}';
+      CREATE ROLE checkin_service LOGIN PASSWORD '${CHECKIN_DB_PASSWORD}';
+      CREATE ROLE profile_service LOGIN PASSWORD '${PROFILE_DB_PASSWORD}';
+      CREATE ROLE statistics_service LOGIN PASSWORD '${STATISTICS_DB_PASSWORD}';
+      CREATE SCHEMA auth_schema AUTHORIZATION auth_service;
+      CREATE SCHEMA plan_schema AUTHORIZATION plan_service;
+      CREATE SCHEMA checkin_schema AUTHORIZATION checkin_service;
+      CREATE SCHEMA profile_schema AUTHORIZATION profile_service;
+      CREATE SCHEMA statistics_schema AUTHORIZATION statistics_service;
+      GRANT USAGE, CREATE ON SCHEMA auth_schema TO auth_service;
+      GRANT USAGE, CREATE ON SCHEMA plan_schema TO plan_service;
+      GRANT USAGE, CREATE ON SCHEMA checkin_schema TO checkin_service;
+      GRANT USAGE, CREATE ON SCHEMA profile_schema TO profile_service;
+      GRANT USAGE, CREATE ON SCHEMA statistics_schema TO statistics_service;
+    SQL
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    protected-mode yes
+    appendonly yes
+    appendfsync everysec
+    dir /data

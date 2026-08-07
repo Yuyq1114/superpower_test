@@ -1,0 +1,234 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: auth-service}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: auth-service, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: auth-service
+          image: fitness/auth-service:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}, {name: grpc, containerPort: 9090}]
+          envFrom: [{configMapRef: {name: fitness-config}}]
+          env:
+            - {name: DB_USER, value: auth_service}
+            - {name: DB_SCHEMA, value: auth_schema}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: AUTH_DB_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: JWT_SECRET}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: REDIS_PASSWORD}}
+
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 30}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
+          securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 32Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: auth-service}
+  ports: [{name: http, port: 8080, targetPort: http}, {name: grpc, port: 9090, targetPort: grpc}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plan-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: plan-service}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: plan-service, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: plan-service
+          image: fitness/plan-service:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}, {name: grpc, containerPort: 9090}]
+          envFrom: [{configMapRef: {name: fitness-config}}]
+          env:
+            - {name: DB_USER, value: plan_service}
+            - {name: DB_SCHEMA, value: plan_schema}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: PLAN_DB_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: JWT_SECRET}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: REDIS_PASSWORD}}
+
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 30}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
+          securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 32Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plan-service
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: plan-service}
+  ports: [{name: http, port: 8080, targetPort: http}, {name: grpc, port: 9090, targetPort: grpc}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkin-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: checkin-service}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: checkin-service, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: checkin-service
+          image: fitness/checkin-service:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}, {name: grpc, containerPort: 9090}]
+          envFrom: [{configMapRef: {name: fitness-config}}]
+          env:
+            - {name: DB_USER, value: checkin_service}
+            - {name: DB_SCHEMA, value: checkin_schema}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: CHECKIN_DB_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: JWT_SECRET}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: REDIS_PASSWORD}}
+
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 30}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
+          securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 32Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: checkin-service
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: checkin-service}
+  ports: [{name: http, port: 8080, targetPort: http}, {name: grpc, port: 9090, targetPort: grpc}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: profile-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: profile-service}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: profile-service, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: profile-service
+          image: fitness/profile-service:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}, {name: grpc, containerPort: 9090}]
+          envFrom: [{configMapRef: {name: fitness-config}}]
+          env:
+            - {name: DB_USER, value: profile_service}
+            - {name: DB_SCHEMA, value: profile_schema}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: PROFILE_DB_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: JWT_SECRET}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: REDIS_PASSWORD}}
+
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 30}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
+          securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 32Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: profile-service
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: profile-service}
+  ports: [{name: http, port: 8080, targetPort: http}, {name: grpc, port: 9090, targetPort: grpc}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: statistics-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: statistics-service}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: statistics-service, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: statistics-service
+          image: fitness/statistics-service:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}, {name: grpc, containerPort: 9090}]
+          envFrom: [{configMapRef: {name: fitness-config}}]
+          env:
+            - {name: DB_USER, value: statistics_service}
+            - {name: DB_SCHEMA, value: statistics_schema}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: STATISTICS_DB_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: JWT_SECRET}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: REDIS_PASSWORD}}
+
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 30}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
+          resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
+          securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 32Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: statistics-service
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: statistics-service}
+  ports: [{name: http, port: 8080, targetPort: http}, {name: grpc, port: 9090, targetPort: grpc}]
