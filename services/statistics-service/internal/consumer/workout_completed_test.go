@@ -296,3 +296,31 @@ func TestBackoffClampsExtremeDurationsWithoutOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateSettingsRejectsSubSecondTTL(t *testing.T) {
+	c := New(nil, nil, "test")
+	c.DedupeTTL = 500 * time.Millisecond
+	if err := c.ValidateSettings(); err == nil {
+		t.Fatal("expected sub-second TTL error")
+	}
+}
+
+func TestValidateSettingsRejectsClusterMode(t *testing.T) {
+	c := New(nil, nil, "test")
+	c.RedisCluster = true
+	if err := c.ValidateSettings(); err == nil {
+		t.Fatal("expected cluster unsupported error")
+	}
+}
+
+func TestValidateSettingsAcceptsCustomStreamsAndTTL(t *testing.T) {
+	c := New(nil, nil, "test")
+	c.SourceStream, c.DeadLetterStream, c.GroupName = "events", "dlq", "group"
+	c.DedupeTTL = 2 * time.Second
+	if err := c.ValidateSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if c.DedupeTTL != 2*time.Second {
+		t.Fatalf("ttl=%s", c.DedupeTTL)
+	}
+}

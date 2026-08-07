@@ -46,12 +46,25 @@ type Consumer struct {
 	DeadLetterStream string
 	GroupName        string
 	DedupeTTL        time.Duration
+	RedisCluster     bool
 }
 
 func New(r redis.UniversalClient, h Handler, name string) *Consumer {
 	return &Consumer{Redis: r, Handler: h, Name: name, MaxRetries: 5, Block: time.Second, BatchSize: 10, ProcessTimeout: 30 * time.Second, BackoffBase: 100 * time.Millisecond, BackoffMax: 5 * time.Second, RandInt63n: rand.Int63n, SourceStream: Stream, DeadLetterStream: DeadLetterStream, GroupName: Group, DedupeTTL: 7 * 24 * time.Hour}
 }
 
+func (c *Consumer) ValidateSettings() error {
+	if c.SourceStream == "" || c.DeadLetterStream == "" || c.GroupName == "" {
+		return fmt.Errorf("stream and group settings are required")
+	}
+	if c.RedisCluster {
+		return fmt.Errorf("redis cluster is unsupported for multi-key DLQ Lua")
+	}
+	if c.DedupeTTL < time.Second {
+		return fmt.Errorf("dedupe TTL must be at least 1s")
+	}
+	return nil
+}
 func (c *Consumer) sourceStream() string {
 	if c.SourceStream != "" {
 		return c.SourceStream
