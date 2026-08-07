@@ -93,14 +93,31 @@ func checkRoleIsolation(t *testing.T, adminDSN, role, ownSchema, otherSchema str
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sqlDB.Close()
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("%s close database: %v", role, err)
+		}
+	})
 	table := fmt.Sprintf("storage_isolation_%d", time.Now().UnixNano())
 	own := quotePostgresIdentifier(ownSchema)
 	name := quotePostgresIdentifier(table)
-	if err := db.Exec(fmt.Sprintf("CREATE TABLE %s.%s (id integer); CREATE SEQUENCE %s.%s_seq", own, name, own, name)).Error; err != nil {
+	sequenceName := quotePostgresIdentifier(table + "_seq")
+	if err := db.Exec(fmt.Sprintf("CREATE TABLE %s.%s (id integer)", own, name)).Error; err != nil {
 		t.Fatalf("%s cannot create in own schema: %v", role, err)
 	}
-	defer db.Exec(fmt.Sprintf("DROP TABLE %s.%s; DROP SEQUENCE %s.%s_seq", own, name, own, name))
+	t.Cleanup(func() {
+		if err := db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s.%s", own, name)).Error; err != nil {
+			t.Errorf("%s cleanup table: %v", role, err)
+		}
+	})
+	if err := db.Exec(fmt.Sprintf("CREATE SEQUENCE %s.%s", own, sequenceName)).Error; err != nil {
+		t.Fatalf("%s cannot create sequence in own schema: %v", role, err)
+	}
+	t.Cleanup(func() {
+		if err := db.Exec(fmt.Sprintf("DROP SEQUENCE IF EXISTS %s.%s", own, sequenceName)).Error; err != nil {
+			t.Errorf("%s cleanup sequence: %v", role, err)
+		}
+	})
 	if err := db.Exec(fmt.Sprintf("CREATE TABLE %s.%s (id integer)", quotePostgresIdentifier(otherSchema), name)).Error; err == nil {
 		t.Fatalf("%s created table in other schema", role)
 	}

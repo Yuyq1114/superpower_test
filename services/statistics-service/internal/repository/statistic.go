@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/example/fitness-checkin/services/statistics-service/internal/model"
@@ -16,7 +17,11 @@ func table(schema, name string) string {
 	if schema == "" {
 		schema = DefaultSchema
 	}
-	return `"` + schema + `"."` + name + `"`
+	return quoteIdentifier(schema) + "." + quoteIdentifier(name)
+}
+
+func quoteIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
 func migrationSQL() []string {
@@ -69,7 +74,7 @@ func (r GORM) ConsumeWorkoutCompleted(ctx context.Context, event model.WorkoutCo
 			bucket := bucketStart(period, event.CompletedAt)
 			now := time.Now().UTC()
 			summary := model.Aggregate{UserID: event.UserID, Period: period, BucketStart: bucket, WorkoutCount: 1}
-			if err := tx.Table(table(r.Schema, "summaries")).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "period"}, {Name: "bucket_start"}}, DoUpdates: clause.Assignments(map[string]any{"workout_count": gorm.Expr("workout_count + 1"), "updated_at": now})}).Create(map[string]any{"user_id": summary.UserID, "period": summary.Period, "bucket_start": summary.BucketStart, "workout_count": 1, "active_days": 0, "total_duration_seconds": 0, "updated_at": now}).Error; err != nil {
+			if err := tx.Table(table(r.Schema, "summaries")).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "period"}, {Name: "bucket_start"}}, DoUpdates: clause.Assignments(map[string]any{"workout_count": gorm.Expr(table(r.Schema, "summaries") + `."workout_count" + 1`), "updated_at": now})}).Create(map[string]any{"user_id": summary.UserID, "period": summary.Period, "bucket_start": summary.BucketStart, "workout_count": 1, "active_days": 0, "total_duration_seconds": 0, "updated_at": now}).Error; err != nil {
 				return err
 			}
 			day := activeDay{UserID: event.UserID, Period: period, BucketStart: bucket, ActivityDate: dayStart(event.CompletedAt)}
