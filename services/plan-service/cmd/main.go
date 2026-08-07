@@ -51,7 +51,7 @@ func main() {
 	}
 	reg := observability.NewRegistry()
 	m := observability.NewMetrics(reg)
-	gs := grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: false}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20), grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadline(5*time.Second), requestLogger(logger), metrics(m)))
+	gs := grpc.NewServer(grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 30 * time.Second, PermitWithoutStream: false}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20), grpc.ChainStreamInterceptor(identity.StreamServerInterceptor(cfg.JWTSecret)), grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadline(5*time.Second), requestLogger(logger), metrics(m)))
 	planv1.RegisterPlanServiceServer(gs, plangrpc.NewServer(service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema})))
 	sqlDB, _ := db.DB()
 	health := servicehealth.New(func(c context.Context) error {

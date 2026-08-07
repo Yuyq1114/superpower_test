@@ -24,7 +24,7 @@ func token(t *testing.T, secret, user, jti string) string {
 func TestInterceptorUsesAuthCompatibleClaimsAndValidatedCorrelationIDs(t *testing.T) {
 	i := UnaryServerInterceptor("secret")
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("user_id", "forged", "x-trace-id", "trace_1", "x-request-id", "request-1", "authorization", "Bearer "+token(t, "secret", "trusted", "jti")))
-	_, e := i(ctx, nil, &grpc.UnaryServerInfo{}, func(ctx context.Context, req any) (any, error) {
+	_, e := i(ctx, &planv1.GetPlanRequest{UserId: "trusted"}, &grpc.UnaryServerInfo{}, func(ctx context.Context, req any) (any, error) {
 		u, trace, request, ok := FromContext(ctx)
 		if !ok || u != "trusted" || trace != "trace_1" || request != "request-1" {
 			t.Fatal("trusted context mismatch")
@@ -35,12 +35,12 @@ func TestInterceptorUsesAuthCompatibleClaimsAndValidatedCorrelationIDs(t *testin
 		t.Fatal(e)
 	}
 	missingJTI := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token(t, "secret", "trusted", "")))
-	_, e = i(missingJTI, nil, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) { return nil, nil })
+	_, e = i(missingJTI, &planv1.GetPlanRequest{UserId: "trusted"}, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) { return nil, nil })
 	if status.Code(e) != codes.Unauthenticated {
 		t.Fatal("missing jti accepted")
 	}
 	forged := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-trace-id", "forged"))
-	_, e = i(forged, nil, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) {
+	_, e = i(forged, &planv1.GetPlanRequest{UserId: "trusted"}, &grpc.UnaryServerInfo{}, func(context.Context, any) (any, error) {
 		t.Fatal("unauthenticated request propagated")
 		return nil, nil
 	})
@@ -81,5 +81,48 @@ func TestAllPlanRequestsEnforceUserMatch(t *testing.T) {
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("%T err=%v", req, err)
 		}
+	}
+}
+
+type unknownRequest struct{}
+type streamStub struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s streamStub) Context() context.Context { return s.ctx }
+func TestUnaryRejectsNilAndUnknownRequests(t *testing.T) {
+	for _, req := range []any{nil, unknownRequest{}} {
+		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token(t, "secret", "trusted", "j")))
+		called := false
+		_, err := UnaryServerInterceptor("secret")(ctx, req, &grpc.UnaryServerInfo{FullMethod: "/service/Test"}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+		if status.Code(err) != codes.InvalidArgument || called {
+			t.Fatalf("req=%T err=%v called=%v", req, err, called)
+		}
+	}
+}
+func TestStreamAuthenticationDefaultsClosed(t *testing.T) {
+	interceptor := StreamServerInterceptor("secret")
+	healthCalled := false
+	err := interceptor(nil, streamStub{ctx: context.Background()}, &grpc.StreamServerInfo{FullMethod: "/grpc.health.v1.Health/Watch"}, func(any, grpc.ServerStream) error { healthCalled = true; return nil })
+	if err != nil || !healthCalled {
+		t.Fatalf("health watch err=%v called=%v", err, healthCalled)
+	}
+	for _, auth := range []string{"", "Bearer invalid"} {
+		ctx := context.Background()
+		if auth != "" {
+			ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("authorization", auth))
+		}
+		called := false
+		err = interceptor(nil, streamStub{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: "/service/Stream"}, func(any, grpc.ServerStream) error { called = true; return nil })
+		if status.Code(err) != codes.Unauthenticated || called {
+			t.Fatalf("auth=%q err=%v called=%v", auth, err, called)
+		}
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token(t, "secret", "trusted", "j")))
+	called := false
+	err = interceptor(nil, streamStub{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: "/service/Stream"}, func(any, grpc.ServerStream) error { called = true; return nil })
+	if status.Code(err) != codes.Unimplemented || called {
+		t.Fatalf("valid token err=%v called=%v", err, called)
 	}
 }

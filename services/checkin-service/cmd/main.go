@@ -84,7 +84,7 @@ func main() {
 	failed := prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_outbox_failed_total", Help: "Failed outbox publishes."})
 	retried := prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_outbox_retried_total", Help: "Retried outbox events."})
 	reg.MustRegister(published, failed, retried)
-	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadlineInterceptor(5*time.Second), metricsInterceptor(m, logger)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20))
+	gs := grpc.NewServer(grpc.ChainStreamInterceptor(identity.StreamServerInterceptor(cfg.JWTSecret)), grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadlineInterceptor(5*time.Second), metricsInterceptor(m, logger)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}), grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20))
 	checkinv1.RegisterCheckinServiceServer(gs, checkingrpc.NewServer(service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema}, planChecker{client: planv1.NewPlanServiceClient(pc)})))
 	sqlDB, _ := db.DB()
 	health := servicehealth.New(func(c context.Context) error {

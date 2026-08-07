@@ -44,7 +44,14 @@ func UnaryServerInterceptor(secret string) grpc.UnaryServerInterceptor {
 		if e != nil {
 			return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 		}
-		if identified, ok := req.(interface{ GetUserId() string }); ok && identified.GetUserId() != u {
+		if req == nil {
+			return nil, status.Error(codes.InvalidArgument, "request required")
+		}
+		identified, ok := req.(interface{ GetUserId() string })
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "request user identity required")
+		}
+		if identified.GetUserId() != u {
 			return nil, status.Error(codes.PermissionDenied, "permission denied")
 		}
 		trace, request := "", ""
@@ -55,5 +62,22 @@ func UnaryServerInterceptor(secret string) grpc.UnaryServerInterceptor {
 			request = x[0]
 		}
 		return h(WithTrusted(ctx, u, trace, request), req)
+	}
+}
+
+func StreamServerInterceptor(secret string) grpc.StreamServerInterceptor {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if info.FullMethod == "/grpc.health.v1.Health/Watch" {
+			return handler(srv, stream)
+		}
+		md, _ := metadata.FromIncomingContext(stream.Context())
+		values := md.Get("authorization")
+		if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
+			return status.Error(codes.Unauthenticated, "unauthenticated")
+		}
+		if _, err := authclaims.ParseAccess(strings.TrimSpace(strings.TrimPrefix(values[0], "Bearer ")), []byte(secret), nil); err != nil {
+			return status.Error(codes.Unauthenticated, "unauthenticated")
+		}
+		return status.Error(codes.Unimplemented, "stream method unsupported")
 	}
 }
