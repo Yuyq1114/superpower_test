@@ -207,3 +207,92 @@ func TestRunBacksOffErrorsResetsAfterSuccessAndCancelsPromptly(t *testing.T) {
 		}
 	}
 }
+
+func TestDLQWriteFailureLeavesPendingAndRetryCompensates(t *testing.T) {
+	c, r, _ := setupConsumer(t, func(context.Context, model.WorkoutCompleted) error { return errors.New("boom") })
+	id := addEvent(t, r, validValues())
+	_ = c.ReadOnce(context.Background())
+	if err := r.Set(context.Background(), c.deadLetterStream(), "wrong-type", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	values := cloneValues(validValues())
+	if err := c.deadLetterAndAck(context.Background(), id, values); err == nil {
+		t.Fatal("expected XADD wrong-type error")
+	}
+	pending, _ := r.XPending(context.Background(), c.sourceStream(), c.groupName()).Result()
+	if pending.Count != 1 {
+		t.Fatalf("pending=%d", pending.Count)
+	}
+	state, _ := r.Get(context.Background(), c.dedupeKey(id)).Result()
+	if state != "pending" {
+		t.Fatalf("state=%q", state)
+	}
+	if err := r.Del(context.Background(), c.deadLetterStream()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.deadLetterAndAck(context.Background(), id, values); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ = r.XPending(context.Background(), c.sourceStream(), c.groupName()).Result()
+	if pending.Count != 0 {
+		t.Fatalf("pending after retry=%d", pending.Count)
+	}
+	if got, _ := r.XLen(context.Background(), c.deadLetterStream()).Result(); got != 1 {
+		t.Fatalf("dlq=%d", got)
+	}
+}
+func TestConfiguredStreamsGroupAndDedupeTTL(t *testing.T) {
+	m := miniredis.RunT(t)
+	r := redis.NewClient(&redis.Options{Addr: m.Addr()})
+	c := New(r, handlerFunc(func(context.Context, model.WorkoutCompleted) error { return errors.New("boom") }), "configured")
+	c.SourceStream, c.DeadLetterStream, c.GroupName = "custom-events", "custom-dlq", "custom-group"
+	c.DedupeTTL = 48 * time.Hour
+	if err := c.EnsureGroup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := r.XAdd(context.Background(), &redis.XAddArgs{Stream: c.SourceStream, Values: validValues()}).Result()
+	_ = c.ReadOnce(context.Background())
+	values := cloneValues(validValues())
+	values["source_message_id"] = id
+	if err := c.deadLetterAndAck(context.Background(), id, values); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.XLen(context.Background(), c.DeadLetterStream).Result(); got != 1 {
+		t.Fatalf("dlq len=%d", got)
+	}
+	ttl := m.TTL(c.dedupeKey(id))
+	if ttl != 48*time.Hour {
+		t.Fatalf("ttl=%s", ttl)
+	}
+}
+
+func TestPendingDLQStateRetriesWriteBeforeAck(t *testing.T) {
+	c, r, _ := setupConsumer(t, func(context.Context, model.WorkoutCompleted) error { return errors.New("boom") })
+	id := addEvent(t, r, validValues())
+	_ = c.ReadOnce(context.Background())
+	if err := r.Set(context.Background(), c.dedupeKey(id), "pending", c.dedupeTTL()).Err(); err != nil {
+		t.Fatal(err)
+	}
+	values := cloneValues(validValues())
+	values["source_message_id"] = id
+	if err := c.deadLetterAndAck(context.Background(), id, values); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.XLen(context.Background(), c.deadLetterStream()).Result(); got != 1 {
+		t.Fatalf("dlq=%d", got)
+	}
+	pending, _ := r.XPending(context.Background(), c.sourceStream(), c.groupName()).Result()
+	if pending.Count != 0 {
+		t.Fatalf("pending=%d", pending.Count)
+	}
+}
+
+func TestBackoffClampsExtremeDurationsWithoutOverflow(t *testing.T) {
+	cases := []Consumer{{BackoffBase: time.Duration(1 << 62), BackoffMax: time.Duration(1 << 62), RandInt63n: func(n int64) int64 { return n - 1 }}, {BackoffBase: -1, BackoffMax: -1}}
+	for i := range cases {
+		d := cases[i].backoff(1000)
+		if d <= 0 || d > 5*time.Second && i == 1 || d < 0 {
+			t.Fatalf("case %d duration=%s", i, d)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+
 	"strings"
 	"time"
 
@@ -24,31 +25,62 @@ type Handler interface {
 }
 
 type Consumer struct {
-	Redis          redis.UniversalClient
-	Handler        Handler
-	Name           string
-	Logger         *slog.Logger
-	MaxRetries     int64
-	Block          time.Duration
-	BatchSize      int64
-	OnConsumed     func()
-	OnRetry        func()
-	OnDLQ          func()
-	OnLag          func(int64)
-	ProcessTimeout time.Duration
-	BackoffBase    time.Duration
-	BackoffMax     time.Duration
-	Sleep          func(context.Context, time.Duration) error
-	RandInt63n     func(int64) int64
-	RunStep        func(context.Context) error
+	Redis            redis.UniversalClient
+	Handler          Handler
+	Name             string
+	Logger           *slog.Logger
+	MaxRetries       int64
+	Block            time.Duration
+	BatchSize        int64
+	OnConsumed       func()
+	OnRetry          func()
+	OnDLQ            func()
+	OnLag            func(int64)
+	ProcessTimeout   time.Duration
+	BackoffBase      time.Duration
+	BackoffMax       time.Duration
+	Sleep            func(context.Context, time.Duration) error
+	RandInt63n       func(int64) int64
+	RunStep          func(context.Context) error
+	SourceStream     string
+	DeadLetterStream string
+	GroupName        string
+	DedupeTTL        time.Duration
 }
 
 func New(r redis.UniversalClient, h Handler, name string) *Consumer {
-	return &Consumer{Redis: r, Handler: h, Name: name, MaxRetries: 5, Block: time.Second, BatchSize: 10, ProcessTimeout: 30 * time.Second, BackoffBase: 100 * time.Millisecond, BackoffMax: 5 * time.Second, RandInt63n: rand.Int63n}
+	return &Consumer{Redis: r, Handler: h, Name: name, MaxRetries: 5, Block: time.Second, BatchSize: 10, ProcessTimeout: 30 * time.Second, BackoffBase: 100 * time.Millisecond, BackoffMax: 5 * time.Second, RandInt63n: rand.Int63n, SourceStream: Stream, DeadLetterStream: DeadLetterStream, GroupName: Group, DedupeTTL: 7 * 24 * time.Hour}
 }
 
+func (c *Consumer) sourceStream() string {
+	if c.SourceStream != "" {
+		return c.SourceStream
+	}
+	return Stream
+}
+func (c *Consumer) deadLetterStream() string {
+	if c.DeadLetterStream != "" {
+		return c.DeadLetterStream
+	}
+	return DeadLetterStream
+}
+func (c *Consumer) groupName() string {
+	if c.GroupName != "" {
+		return c.GroupName
+	}
+	return Group
+}
+func (c *Consumer) dedupeTTL() time.Duration {
+	if c.DedupeTTL <= 0 {
+		return 7 * 24 * time.Hour
+	}
+	return c.DedupeTTL
+}
+func (c *Consumer) dedupeKey(id string) string {
+	return "statistics:dead-letter:" + c.groupName() + ":" + c.sourceStream() + ":" + id
+}
 func (c *Consumer) EnsureGroup(ctx context.Context) error {
-	err := c.Redis.XGroupCreateMkStream(ctx, Stream, Group, "0").Err()
+	err := c.Redis.XGroupCreateMkStream(ctx, c.sourceStream(), c.groupName(), "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return err
 	}
@@ -91,22 +123,33 @@ func (c *Consumer) runStep(ctx context.Context) error {
 }
 
 func (c *Consumer) backoff(attempt int) time.Duration {
-	d := c.BackoffBase
-	if d <= 0 {
-		d = 100 * time.Millisecond
+	base, max := c.BackoffBase, c.BackoffMax
+	if base <= 0 {
+		base = 100 * time.Millisecond
 	}
-	max := c.BackoffMax
 	if max <= 0 {
 		max = 5 * time.Second
 	}
+	if base > max {
+		base = max
+	}
+	d := base
 	for i := 0; i < attempt && d < max; i++ {
+		if d > max/2 {
+			d = max
+			break
+		}
 		d *= 2
 	}
-	if d > max {
-		d = max
-	}
-	if c.RandInt63n != nil {
-		d += time.Duration(c.RandInt63n(int64(d/2) + 1))
+	if c.RandInt63n != nil && d < max {
+		room := max - d
+		jitterBound := d / 2
+		if jitterBound > room {
+			jitterBound = room
+		}
+		if jitterBound > 0 {
+			d += time.Duration(c.RandInt63n(int64(jitterBound) + 1))
+		}
 	}
 	return d
 }
@@ -124,7 +167,7 @@ func (c *Consumer) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 func (c *Consumer) ReadOnce(ctx context.Context) error {
-	streams, err := c.Redis.XReadGroup(ctx, &redis.XReadGroupArgs{Group: Group, Consumer: c.Name, Streams: []string{Stream, ">"}, Count: c.batch(), Block: c.Block}).Result()
+	streams, err := c.Redis.XReadGroup(ctx, &redis.XReadGroupArgs{Group: c.groupName(), Consumer: c.Name, Streams: []string{c.sourceStream(), ">"}, Count: c.batch(), Block: c.Block}).Result()
 	if err != nil {
 		return err
 	}
@@ -135,7 +178,7 @@ func (c *Consumer) ClaimOnce(ctx context.Context, idle time.Duration) error {
 	start := "0-0"
 	var first error
 	for {
-		messages, next, err := c.Redis.XAutoClaim(ctx, &redis.XAutoClaimArgs{Stream: Stream, Group: Group, Consumer: c.Name, MinIdle: idle, Start: start, Count: c.batch()}).Result()
+		messages, next, err := c.Redis.XAutoClaim(ctx, &redis.XAutoClaimArgs{Stream: c.sourceStream(), Group: c.groupName(), Consumer: c.Name, MinIdle: idle, Start: start, Count: c.batch()}).Result()
 		if err != nil {
 			return err
 		}
@@ -175,7 +218,7 @@ func (c *Consumer) process(ctx context.Context, msg redis.XMessage) error {
 		cancel()
 	}
 	if err == nil {
-		if ackErr := c.Redis.XAck(ctx, Stream, Group, msg.ID).Err(); ackErr != nil {
+		if ackErr := c.Redis.XAck(ctx, c.sourceStream(), c.groupName(), msg.ID).Err(); ackErr != nil {
 			return ackErr
 		}
 		if c.OnConsumed != nil {
@@ -189,7 +232,7 @@ func (c *Consumer) process(ctx context.Context, msg redis.XMessage) error {
 	}
 	if deliveries >= c.maxRetries() {
 		values := cloneValues(msg.Values)
-		values["source_stream"] = Stream
+		values["source_stream"] = c.sourceStream()
 		values["source_message_id"] = msg.ID
 		values["delivery_count"] = deliveries
 		values["dead_letter_reason"] = err.Error()
@@ -217,36 +260,42 @@ func (c *Consumer) processTimeout() time.Duration {
 }
 
 var deadLetterAndAckScript = redis.NewScript(`
-local added = redis.call('SETNX', KEYS[1], '1')
-if added == 1 then
-  redis.call('XADD', KEYS[2], '*', unpack(ARGV, 1, #ARGV - 2))
+local state = redis.call('GET', KEYS[1])
+if state == 'written' then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  redis.call('XACK', KEYS[3], ARGV[#ARGV - 1], ARGV[#ARGV])
+  return 'acked'
 end
+if not state then redis.call('SET', KEYS[1], 'pending', 'EX', ARGV[1]) end
+local fields = {}
+for i = 2, #ARGV - 2 do fields[i - 1] = ARGV[i] end
+redis.call('XADD', KEYS[2], '*', unpack(fields))
+redis.call('SET', KEYS[1], 'written', 'EX', ARGV[1])
 redis.call('XACK', KEYS[3], ARGV[#ARGV - 1], ARGV[#ARGV])
-return added
+return 'written'
 `)
 
 func (c *Consumer) deadLetterAndAck(ctx context.Context, id string, values map[string]any) error {
-	args := make([]any, 0, len(values)*2+3)
+	args := []any{int64(c.dedupeTTL() / time.Second)}
 	for key, value := range values {
-		args = append(args, key, value)
+		args = append(args, key, fmt.Sprint(value))
 	}
-	args = append(args, Group, id)
-	dedupeKey := "{statistics}:dead-letter:" + Stream + ":" + id
-	_, err := deadLetterAndAckScript.Run(ctx, c.Redis, []string{dedupeKey, DeadLetterStream, Stream}, args...).Result()
+	args = append(args, c.groupName(), id)
+	_, err := deadLetterAndAckScript.Run(ctx, c.Redis, []string{c.dedupeKey(id), c.deadLetterStream(), c.sourceStream()}, args...).Result()
 	return err
 }
 func (c *Consumer) reportLag(ctx context.Context) {
 	if c.OnLag == nil {
 		return
 	}
-	pending, err := c.Redis.XPending(ctx, Stream, Group).Result()
+	pending, err := c.Redis.XPending(ctx, c.sourceStream(), c.groupName()).Result()
 	if err == nil {
 		c.OnLag(pending.Count)
 	}
 }
 
 func (c *Consumer) deliveryCount(ctx context.Context, id string) (int64, error) {
-	items, err := c.Redis.XPendingExt(ctx, &redis.XPendingExtArgs{Stream: Stream, Group: Group, Start: id, End: id, Count: 1}).Result()
+	items, err := c.Redis.XPendingExt(ctx, &redis.XPendingExtArgs{Stream: c.sourceStream(), Group: c.groupName(), Start: id, End: id, Count: 1}).Result()
 	if err != nil {
 		return 0, err
 	}
