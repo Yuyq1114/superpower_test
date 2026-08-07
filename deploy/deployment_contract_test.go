@@ -61,3 +61,21 @@ func TestDevKustomizationRequiresLocalSecretFile(t *testing.T) {
 		t.Fatalf("failure must explain missing secret.env: %s", output)
 	}
 }
+
+func TestPostgresInitUsesQuotedPsqlVariablesForRolePasswords(t *testing.T) {
+	data, err := os.ReadFile("k8s/base/configmap.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	roles := []string{"auth", "plan", "checkin", "profile", "statistics"}
+	for _, role := range roles {
+		want := "PASSWORD :'" + role + "_password'"
+		if !strings.Contains(text, want) {
+			t.Errorf("postgres init missing safe psql variable %q", want)
+		}
+	}
+	if strings.Contains(text, "PASSWORD '${") {
+		t.Fatal("postgres init must not use shell placeholders inside quoted heredoc")
+	}
+}

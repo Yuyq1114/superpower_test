@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/example/fitness-checkin/pkg/apperror"
+	"github.com/example/fitness-checkin/pkg/observability"
 	authv1 "github.com/example/fitness-checkin/proto/gen/auth/v1"
 	checkinv1 "github.com/example/fitness-checkin/proto/gen/checkin/v1"
 	planv1 "github.com/example/fitness-checkin/proto/gen/plan/v1"
@@ -40,6 +41,10 @@ type handler struct{ d *Dependencies }
 var validID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 func NewRouter(d *Dependencies) *gin.Engine {
+	return NewRouterWithMetrics(d, nil)
+}
+
+func NewRouterWithMetrics(d *Dependencies, metrics *observability.Metrics) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	if d == nil {
@@ -53,6 +58,9 @@ func NewRouter(d *Dependencies) *gin.Engine {
 		d.Statistics = d.Clients.Statistics
 	}
 	h := &handler{d: d}
+	if metrics != nil {
+		r.Use(gatewayMetrics(metrics))
+	}
 	r.Use(gin.Recovery(), h.correlation(), bodyLimit(1<<20), h.logging())
 	r.GET("/healthz", func(c *gin.Context) { c.Status(200) })
 	r.GET("/readyz", h.ready)
@@ -510,4 +518,21 @@ func (h *handler) summary(c *gin.Context) {
 		return
 	}
 	c.JSON(200, o)
+}
+
+func gatewayMetrics(metrics *observability.Metrics) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		started := time.Now()
+		c.Next()
+		route := c.FullPath()
+		if route == "" {
+			route = "__unmatched__"
+		}
+		method := c.Request.Method + " " + route + " " + strconv.Itoa(c.Writer.Status())
+		metrics.RequestsTotal.WithLabelValues("api-gateway", method).Inc()
+		metrics.DurationSeconds.WithLabelValues("api-gateway", method).Observe(time.Since(started).Seconds())
+		if c.Writer.Status() >= nethttp.StatusBadRequest || len(c.Errors) > 0 {
+			metrics.ErrorsTotal.WithLabelValues("api-gateway", method).Inc()
+		}
+	}
 }

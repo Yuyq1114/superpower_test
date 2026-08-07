@@ -68,8 +68,7 @@ func run() error {
 	}
 	defer cs.Close()
 	reg := observability.NewRegistry()
-	_ = observability.NewMetrics(reg)
-	router := gatewayhttp.NewRouter(productionDependencies(cs, cfg.Secret, logger))
+	router := gatewayhttp.NewRouterWithMetrics(productionDependencies(cs, cfg.Secret, logger), observability.NewMetrics(reg))
 	router.GET("/metrics", func(c *gin.Context) { promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(c.Writer, c.Request) })
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	fail := make(chan error, 1)

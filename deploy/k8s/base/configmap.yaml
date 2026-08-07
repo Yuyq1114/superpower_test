@@ -38,11 +38,11 @@ data:
     #!/bin/sh
     set -eu
     psql -v ON_ERROR_STOP=1 -v auth_password="$AUTH_DB_PASSWORD" -v plan_password="$PLAN_DB_PASSWORD" -v checkin_password="$CHECKIN_DB_PASSWORD" -v profile_password="$PROFILE_DB_PASSWORD" -v statistics_password="$STATISTICS_DB_PASSWORD" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-'SQL'
-      CREATE ROLE auth_service LOGIN PASSWORD '${AUTH_DB_PASSWORD}';
-      CREATE ROLE plan_service LOGIN PASSWORD '${PLAN_DB_PASSWORD}';
-      CREATE ROLE checkin_service LOGIN PASSWORD '${CHECKIN_DB_PASSWORD}';
-      CREATE ROLE profile_service LOGIN PASSWORD '${PROFILE_DB_PASSWORD}';
-      CREATE ROLE statistics_service LOGIN PASSWORD '${STATISTICS_DB_PASSWORD}';
+      CREATE ROLE auth_service LOGIN PASSWORD :'auth_password';
+      CREATE ROLE plan_service LOGIN PASSWORD :'plan_password';
+      CREATE ROLE checkin_service LOGIN PASSWORD :'checkin_password';
+      CREATE ROLE profile_service LOGIN PASSWORD :'profile_password';
+      CREATE ROLE statistics_service LOGIN PASSWORD :'statistics_password';
       CREATE SCHEMA auth_schema AUTHORIZATION auth_service;
       CREATE SCHEMA plan_schema AUTHORIZATION plan_service;
       CREATE SCHEMA checkin_schema AUTHORIZATION checkin_service;
