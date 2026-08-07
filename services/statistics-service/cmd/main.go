@@ -1,0 +1,163 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/example/fitness-checkin/pkg/config"
+	"github.com/example/fitness-checkin/pkg/observability"
+	"github.com/example/fitness-checkin/pkg/storage"
+	statisticsv1 "github.com/example/fitness-checkin/proto/gen/statistics/v1"
+	"github.com/example/fitness-checkin/services/statistics-service/internal/consumer"
+	statisticsgrpc "github.com/example/fitness-checkin/services/statistics-service/internal/grpc"
+	"github.com/example/fitness-checkin/services/statistics-service/internal/identity"
+	"github.com/example/fitness-checkin/services/statistics-service/internal/repository"
+	"github.com/example/fitness-checkin/services/statistics-service/internal/service"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
+)
+
+func main() {
+	logger := observability.NewLogger("statistics-service", nil)
+	slog.SetDefault(logger)
+	cfg, err := config.Load("statistics-service")
+	if err != nil {
+		logger.Error("startup failed", "error", err)
+		return
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	startup, stop := context.WithTimeout(ctx, 10*time.Second)
+	defer stop()
+	db, err := storage.OpenPostgres(startup, cfg)
+	if err != nil {
+		logger.Error("database failed", "error", err)
+		return
+	}
+	if err = repository.Migrate(startup, db); err != nil {
+		logger.Error("migration failed", "error", err)
+		return
+	}
+	rdb, err := storage.OpenRedis(startup, cfg)
+	if err != nil {
+		logger.Error("redis failed", "error", err)
+		return
+	}
+	defer rdb.Close()
+	reg := observability.NewRegistry()
+	m := observability.NewMetrics(reg)
+	cm := newConsumerMetrics(reg)
+	svc := service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema})
+	c := consumer.New(rdb, svc, consumerName())
+	c.Logger = logger
+	c.OnConsumed = cm.consumed.Inc
+	c.OnRetry = cm.retries.Inc
+	c.OnDLQ = cm.dlq.Inc
+	c.OnLag = func(value int64) { cm.lag.Set(float64(value)) }
+	if err = c.EnsureGroup(startup); err != nil {
+		logger.Error("consumer group failed", "error", err)
+		return
+	}
+	gs := grpc.NewServer(grpc.ChainUnaryInterceptor(identity.UnaryServerInterceptor(cfg.JWTSecret), deadlineInterceptor(5*time.Second), metricsInterceptor(m, logger)), grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 5 * time.Minute, Time: 2 * time.Minute, Timeout: 20 * time.Second}))
+	statisticsv1.RegisterStatisticsServiceServer(gs, statisticsgrpc.NewServer(svc))
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
+	if err != nil {
+		logger.Error("listen failed", "error", err)
+		return
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		sql, e := db.DB()
+		if e != nil || !pingDB(r.Context(), sql) || !pingRedis(r.Context(), rdb) {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	hs := &http.Server{Addr: fmt.Sprintf(":%d", cfg.HTTPPort), Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	go func() {
+		if e := c.Run(ctx); e != nil && ctx.Err() == nil {
+			logger.Error("consumer stopped", "error", e)
+			cancel()
+		}
+	}()
+	go func() {
+		if e := gs.Serve(lis); e != nil && ctx.Err() == nil {
+			logger.Error("grpc stopped", "error", e)
+			cancel()
+		}
+	}()
+	go func() {
+		if e := hs.ListenAndServe(); e != nil && !errors.Is(e, http.ErrServerClosed) {
+			logger.Error("http stopped", "error", e)
+			cancel()
+		}
+	}()
+	<-ctx.Done()
+	shutdown, done := context.WithTimeout(context.Background(), 5*time.Second)
+	defer done()
+	_ = hs.Shutdown(shutdown)
+	gs.GracefulStop()
+	_ = lis.Close()
+}
+
+type consumerMetrics struct {
+	consumed, retries, dlq prometheus.Counter
+	lag                    prometheus.Gauge
+}
+
+func newConsumerMetrics(reg prometheus.Registerer) *consumerMetrics {
+	m := &consumerMetrics{consumed: prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_statistics_events_consumed_total", Help: "Successfully consumed workout events."}), retries: prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_statistics_event_retries_total", Help: "Workout event retries."}), dlq: prometheus.NewCounter(prometheus.CounterOpts{Name: "fitness_checkin_statistics_event_dlq_total", Help: "Workout events moved to DLQ."}), lag: prometheus.NewGauge(prometheus.GaugeOpts{Name: "fitness_checkin_statistics_consumer_lag", Help: "Pending workout events."})}
+	reg.MustRegister(m.consumed, m.retries, m.dlq, m.lag)
+	return m
+}
+func consumerName() string {
+	if h, e := os.Hostname(); e == nil && h != "" {
+		return h
+	}
+	return fmt.Sprintf("statistics-%d", os.Getpid())
+}
+func pingDB(ctx context.Context, db interface{ PingContext(context.Context) error }) bool {
+	c, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	return db.PingContext(c) == nil
+}
+func pingRedis(ctx context.Context, r redis.UniversalClient) bool {
+	c, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	return r.Ping(c).Err() == nil
+}
+func deadlineInterceptor(d time.Duration) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		c, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		return h(c, req)
+	}
+}
+func metricsInterceptor(m *observability.Metrics, logger *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		started := time.Now()
+		user, trace, request, _ := identity.FromContext(ctx)
+		m.RequestsTotal.WithLabelValues("statistics-service", info.FullMethod).Inc()
+		out, err := h(ctx, req)
+		m.DurationSeconds.WithLabelValues("statistics-service", info.FullMethod).Observe(time.Since(started).Seconds())
+		if err != nil {
+			m.ErrorsTotal.WithLabelValues("statistics-service", info.FullMethod).Inc()
+		}
+		logger.InfoContext(ctx, "request completed", "trace_id", trace, "request_id", request, "user_id", user, "method", info.FullMethod, "error", err)
+		return out, err
+	}
+}
