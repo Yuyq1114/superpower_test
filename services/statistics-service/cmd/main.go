@@ -44,6 +44,16 @@ func main() {
 	}
 }
 
+func buildConsumer(r redis.UniversalClient, h consumer.Handler, name string, configure func(*consumer.Consumer)) (*consumer.Consumer, error) {
+	c := consumer.New(r, h, name)
+	if configure != nil {
+		configure(c)
+	}
+	if err := c.ValidateSettings(); err != nil {
+		return nil, fmt.Errorf("invalid consumer settings: %w", err)
+	}
+	return c, nil
+}
 func run() error {
 	logger := observability.NewLogger("statistics-service", nil)
 	slog.SetDefault(logger)
@@ -71,7 +81,10 @@ func run() error {
 	m := observability.NewMetrics(reg)
 	cm := newConsumerMetrics(reg)
 	svc := service.New(repository.GORM{DB: db, Schema: repository.DefaultSchema})
-	c := consumer.New(rdb, svc, consumerName())
+	c, err := buildConsumer(rdb, svc, consumerName(), nil)
+	if err != nil {
+		return err
+	}
 	c.Logger = logger
 	c.OnConsumed = cm.consumed.Inc
 	c.OnRetry = cm.retries.Inc

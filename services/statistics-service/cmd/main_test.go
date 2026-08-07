@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/example/fitness-checkin/pkg/observability"
+	"github.com/example/fitness-checkin/services/statistics-service/internal/consumer"
 	"github.com/example/fitness-checkin/services/statistics-service/internal/identity"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -90,5 +91,32 @@ func TestAuthenticatedRPCLogsTrustedUser(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), `"user_id":"trusted-user"`) {
 		t.Fatalf("log=%s", output.String())
+	}
+}
+
+func TestBuildConsumerRejectsInvalidStartupSettings(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*consumer.Consumer)
+	}{
+		{name: "sub-second dedupe TTL", configure: func(c *consumer.Consumer) { c.DedupeTTL = 500 * time.Millisecond }},
+		{name: "Redis Cluster", configure: func(c *consumer.Consumer) { c.RedisCluster = true }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := buildConsumer(nil, nil, "test", tt.configure); err == nil {
+				t.Fatal("expected startup assembly validation error")
+			}
+		})
+	}
+}
+
+func TestBuildConsumerAcceptsProductionDefaults(t *testing.T) {
+	c, err := buildConsumer(nil, nil, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DedupeTTL < time.Second || c.RedisCluster {
+		t.Fatalf("consumer=%#v", c)
 	}
 }
