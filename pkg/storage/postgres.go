@@ -97,13 +97,34 @@ func quotePostgresIdentifier(identifier string) string {
 }
 
 func PostgresSchemaExists(ctx context.Context, db *gorm.DB, schema string) (bool, error) {
+	if err := validatePostgresSchema(db, schema); err != nil {
+		return false, err
+	}
+	var exists bool
+	err := db.WithContext(ctx).Raw("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = ?)", schema).Scan(&exists).Error
+	return exists, err
+}
+
+func RequirePostgresSchema(ctx context.Context, db *gorm.DB, schema string) error {
+	if err := validatePostgresSchema(db, schema); err != nil {
+		return err
+	}
+	exists, err := PostgresSchemaExists(ctx, db, schema)
+	if err != nil {
+		return fmt.Errorf("check PostgreSQL schema %q: %w", schema, err)
+	}
+	if !exists {
+		return fmt.Errorf("PostgreSQL schema %q does not exist; it must be created by infrastructure before migration", schema)
+	}
+	return nil
+}
+
+func validatePostgresSchema(db *gorm.DB, schema string) error {
 	if db == nil {
-		return false, errors.New("database is required")
+		return errors.New("database is required")
 	}
 	if !postgresIdentifier.MatchString(schema) {
-		return false, errors.New("schema must be a safe SQL identifier")
+		return errors.New("schema must be a safe SQL identifier")
 	}
-	var count int64
-	err := db.WithContext(ctx).Raw("SELECT count(*) FROM information_schema.schemata WHERE schema_name = ?", schema).Scan(&count).Error
-	return count > 0, err
+	return nil
 }

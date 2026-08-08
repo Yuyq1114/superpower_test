@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/example/fitness-checkin/pkg/apperror"
+	"github.com/example/fitness-checkin/pkg/storage"
 	"github.com/example/fitness-checkin/services/profile-service/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -45,16 +46,14 @@ func migrationSQL(schema string) []string {
 	}
 }
 
-func Migrate(ctx context.Context, db *gorm.DB) error {
-	if err := db.WithContext(ctx).Exec("CREATE SCHEMA IF NOT EXISTS " + quoteIdentifier(DefaultSchema)).Error; err != nil {
-		return fmt.Errorf("migration: %w", err)
-	}
-	return MigrateSchema(ctx, db, DefaultSchema)
-}
+func Migrate(ctx context.Context, db *gorm.DB) error { return MigrateSchema(ctx, db, DefaultSchema) }
 
 func MigrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
 	if schema == "" {
 		return fmt.Errorf("migration: schema is required")
+	}
+	if err := storage.RequirePostgresSchema(ctx, db, schema); err != nil {
+		return fmt.Errorf("profile migration: %w", err)
 	}
 	for _, q := range migrationSQL(schema) {
 		if e := db.WithContext(ctx).Exec(q).Error; e != nil {

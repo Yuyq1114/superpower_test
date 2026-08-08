@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"github.com/example/fitness-checkin/pkg/storage"
 	"github.com/example/fitness-checkin/services/plan-service/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -16,11 +17,18 @@ func table(s, t string) string {
 	}
 	return `"` + s + `"."` + t + `"`
 }
-func Migrate(ctx context.Context, db *gorm.DB) error { return migrateSchema(ctx, db, DefaultSchema) }
+func Migrate(ctx context.Context, db *gorm.DB) error { return MigrateSchema(ctx, db, DefaultSchema) }
+
+func MigrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
+	if err := storage.RequirePostgresSchema(ctx, db, schema); err != nil {
+		return fmt.Errorf("plan migration: %w", err)
+	}
+	return migrateSchema(ctx, db, schema)
+}
 
 func migrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
 	q := `"` + schema + `"`
-	for _, x := range []string{`CREATE SCHEMA IF NOT EXISTS ` + q, `CREATE TABLE IF NOT EXISTS ` + q + `.plans (id text PRIMARY KEY,user_id text NOT NULL,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,status text NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_days (id text PRIMARY KEY,user_id text NOT NULL,plan_id text NOT NULL REFERENCES ` + q + `.plans(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',workout_date date NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_items (id text PRIMARY KEY,user_id text NOT NULL,workout_day_id text NOT NULL REFERENCES ` + q + `.workout_days(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,sets integer NOT NULL DEFAULT 0,repetitions integer NOT NULL DEFAULT 0,weight double precision NOT NULL DEFAULT 0,duration_seconds integer NOT NULL DEFAULT 0,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `ALTER TABLE ` + q + `.plans ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_days ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_items ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `CREATE UNIQUE INDEX IF NOT EXISTS plan_days_unique ON ` + q + `.workout_days(plan_id,workout_date)`, `CREATE UNIQUE INDEX IF NOT EXISTS plans_idempotency_unique ON ` + q + `.plans(user_id,idempotency_key) WHERE idempotency_key <> ''`, `DROP INDEX IF EXISTS ` + q + `.workout_days_idempotency_unique`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_days_idempotency_unique ON ` + q + `.workout_days(user_id,plan_id,idempotency_key) WHERE idempotency_key <> ''`, `DROP INDEX IF EXISTS ` + q + `.workout_items_idempotency_unique`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_items_idempotency_unique ON ` + q + `.workout_items(user_id,workout_day_id,idempotency_key) WHERE idempotency_key <> ''`, `CREATE INDEX IF NOT EXISTS plans_user_id_idx ON ` + q + `.plans(user_id)`, `CREATE INDEX IF NOT EXISTS workout_days_user_plan_idx ON ` + q + `.workout_days(user_id,plan_id)`, `CREATE INDEX IF NOT EXISTS workout_items_user_day_idx ON ` + q + `.workout_items(user_id,workout_day_id)`} {
+	for _, x := range []string{`CREATE TABLE IF NOT EXISTS ` + q + `.plans (id text PRIMARY KEY,user_id text NOT NULL,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,status text NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_days (id text PRIMARY KEY,user_id text NOT NULL,plan_id text NOT NULL REFERENCES ` + q + `.plans(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',workout_date date NOT NULL,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `CREATE TABLE IF NOT EXISTS ` + q + `.workout_items (id text PRIMARY KEY,user_id text NOT NULL,workout_day_id text NOT NULL REFERENCES ` + q + `.workout_days(id) ON DELETE CASCADE,idempotency_key text NOT NULL DEFAULT '',name text NOT NULL,sets integer NOT NULL DEFAULT 0,repetitions integer NOT NULL DEFAULT 0,weight double precision NOT NULL DEFAULT 0,duration_seconds integer NOT NULL DEFAULT 0,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL)`, `ALTER TABLE ` + q + `.plans ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_days ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `ALTER TABLE ` + q + `.workout_items ADD COLUMN IF NOT EXISTS idempotency_key text NOT NULL DEFAULT ''`, `CREATE UNIQUE INDEX IF NOT EXISTS plan_days_unique ON ` + q + `.workout_days(plan_id,workout_date)`, `CREATE UNIQUE INDEX IF NOT EXISTS plans_idempotency_unique ON ` + q + `.plans(user_id,idempotency_key) WHERE idempotency_key <> ''`, `DROP INDEX IF EXISTS ` + q + `.workout_days_idempotency_unique`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_days_idempotency_unique ON ` + q + `.workout_days(user_id,plan_id,idempotency_key) WHERE idempotency_key <> ''`, `DROP INDEX IF EXISTS ` + q + `.workout_items_idempotency_unique`, `CREATE UNIQUE INDEX IF NOT EXISTS workout_items_idempotency_unique ON ` + q + `.workout_items(user_id,workout_day_id,idempotency_key) WHERE idempotency_key <> ''`, `CREATE INDEX IF NOT EXISTS plans_user_id_idx ON ` + q + `.plans(user_id)`, `CREATE INDEX IF NOT EXISTS workout_days_user_plan_idx ON ` + q + `.workout_days(user_id,plan_id)`, `CREATE INDEX IF NOT EXISTS workout_items_user_day_idx ON ` + q + `.workout_items(user_id,workout_day_id)`} {
 		if e := db.WithContext(ctx).Exec(x).Error; e != nil {
 			return fmt.Errorf("migration: %w", e)
 		}

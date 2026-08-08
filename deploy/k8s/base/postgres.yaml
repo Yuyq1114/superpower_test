@@ -29,6 +29,7 @@ spec:
           imagePullPolicy: IfNotPresent
           ports: [{name: postgres, containerPort: 5432}]
           env:
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
             - {name: POSTGRES_DB, value: fitness}
             - {name: POSTGRES_USER, value: fitness_admin}
             - name: POSTGRES_PASSWORD
