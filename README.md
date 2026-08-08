@@ -61,7 +61,7 @@ BASE_URL=http://127.0.0.1:8080 make test-e2e
 
 带 `e2e` tag 的完整栈测试会执行注册、登录、建计划、训练日、训练项目、打卡、相同幂等键重复打卡、身体指标和统计查询。统计查询最多轮询 20 秒，且验证重复打卡最终只计一次；它不直接重放 Redis 消息。`make test-e2e` 先检查 `BASE_URL`，随后执行 `go test -tags=e2e ./tests/e2e -count=1`；直接运行 tagged 测试时，`BASE_URL` 缺失、服务不可达或业务断言失败也都会失败。
 
-PostgreSQL integration 测试必须同时设置 `TEST_DATABASE_DSN`（业务角色）和 `TEST_DATABASE_ADMIN_DSN`（仅用于创建、授权和删除随机 `statistics_test_<hex>` schema）。缺少任一变量时测试会 Skip；admin DSN 不会回退到业务 DSN。每个测试只删除自己创建的随机 schema，不会清空或删除固定 `statistics_schema`，因此可以并行运行。
+PostgreSQL integration 测试必须同时设置 `TEST_DATABASE_DSN`（被测服务的业务角色）和 `TEST_DATABASE_ADMIN_DSN`（仅用于创建、授权和删除随机测试 schema）。profile 与 statistics 迁移测试分别使用 `profile_test_<hex>` 和 `statistics_test_<hex>`；缺少任一变量时测试会 Skip，admin DSN 不会回退到业务 DSN。admin 连接以当前业务角色为 owner 创建 schema，业务连接只在该 schema 内执行迁移和断言，因此业务角色不需要创建任意 schema 的数据库级权限。每个测试只删除自己创建的随机 schema，不会清空或删除固定 `profile_schema` 或 `statistics_schema`，可以并行运行。
 
 重复事件另有两层集成证据：真实 Redis 测试验证同一 `event_id` 会按 at-least-once 语义投递两次；带 `integration` tag 的生产路径测试通过 statistics service 和 GORM repository 的真实 PostgreSQL 事务连续消费同一事件，并断言周汇总 `workout_count=1`、`active_days=1` 且 `processed_events` 仅一行。Redis 投递测试本身不负责数据库幂等，数据库测试也不模拟 Redis consumer。
 
