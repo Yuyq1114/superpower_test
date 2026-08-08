@@ -36,7 +36,7 @@ make down
 docker compose -f deploy/docker-compose.yml up -d postgres redis
 ```
 
-服务也可以单独用 Docker Compose 的 service 名称启动；服务之间的地址由 Compose 环境变量配置。Windows PowerShell 等价命令示例：`$env:BASE_URL='http://127.0.0.1:8080'; go test ./tests/e2e -count=1`。如果端口被占用，设置 `POSTGRES_PORT`、`REDIS_PORT` 或 `GATEWAY_PORT`。
+服务也可以单独用 Docker Compose 的 service 名称启动；服务之间的地址由 Compose 环境变量配置。Windows PowerShell 等价命令示例：`$env:BASE_URL='http://127.0.0.1:8080'; go test -tags=e2e ./tests/e2e -count=1`。如果端口被占用，设置 `POSTGRES_PORT`、`REDIS_PORT` 或 `GATEWAY_PORT`。PostgreSQL 空数据卷初始化时只自动执行 `init.sh`；SQL 挂载在 `/opt/fitness-init/001-init.sql`，由脚本显式执行一次。仓库通过 `.gitattributes` 强制 shell 脚本使用 LF，避免 Windows checkout 产生 CRLF。
 
 ## Proto
 
@@ -53,11 +53,13 @@ powershell -ExecutionPolicy Bypass -File scripts/generate-proto.ps1
 ```bash
 make test                 # go test ./...
 make test-integration     # go test -tags=integration ./...
-go test ./tests/...       # E2E 必须设置 BASE_URL，否则明确失败
+go test ./...             # 常规测试，不编译或运行带 e2e tag 的测试
 BASE_URL=http://127.0.0.1:8080 make test-e2e
 ```
 
-E2E 会执行注册、登录、建计划、训练日、训练项目、打卡、相同幂等键重复打卡、身体指标和统计查询。统计查询最多轮询 20 秒，且验证重复打卡最终只计一次；Redis Stream 的生产事件 payload 由契约测试覆盖，但完整栈 E2E 不直接重放 Redis 消息。`make test-e2e` 强制要求 `BASE_URL`；服务不可达或业务断言失败都会失败，不会静默跳过。
+带 `e2e` tag 的完整栈测试会执行注册、登录、建计划、训练日、训练项目、打卡、相同幂等键重复打卡、身体指标和统计查询。统计查询最多轮询 20 秒，且验证重复打卡最终只计一次；它不直接重放 Redis 消息。`make test-e2e` 先检查 `BASE_URL`，随后执行 `go test -tags=e2e ./tests/e2e -count=1`；直接运行 tagged 测试时，`BASE_URL` 缺失、服务不可达或业务断言失败也都会失败。
+
+重复事件另有两层集成证据：真实 Redis 测试验证同一 `event_id` 会按 at-least-once 语义投递两次；带 `integration` tag 的生产路径测试通过 statistics service 和 GORM repository 的真实 PostgreSQL 事务连续消费同一事件，并断言周汇总 `workout_count=1`、`active_days=1` 且 `processed_events` 仅一行。Redis 投递测试本身不负责数据库幂等，数据库测试也不模拟 Redis consumer。
 
 ## Kubernetes
 

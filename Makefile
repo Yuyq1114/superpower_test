@@ -11,7 +11,7 @@ test-integration:
 
 test-e2e:
 	@if [ -z "$(BASE_URL)" ]; then echo "BASE_URL is required, e.g. BASE_URL=http://127.0.0.1:8080 make test-e2e"; exit 2; fi
-	BASE_URL=$(BASE_URL) go test ./tests/e2e -count=1
+	BASE_URL=$(BASE_URL) go test -tags=e2e ./tests/e2e -count=1
 
 up:
 	docker compose -f deploy/docker-compose.yml up -d

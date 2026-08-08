@@ -9,7 +9,7 @@ import (
 )
 
 func TestDeploymentFilesExistAndContainNoBOM(t *testing.T) {
-	files := []string{"docker/Dockerfile", "k8s/base/kustomization.yaml", "k8s/base/namespace.yaml", "k8s/base/configmap.yaml", "k8s/base/secret.example.yaml", "k8s/base/postgres.yaml", "k8s/base/redis.yaml", "k8s/base/gateway.yaml", "k8s/base/services.yaml", "k8s/dev/kustomization.yaml", "k8s/dev/secret.env.example", "monitoring/prometheus.yaml", "monitoring/grafana.yaml"}
+	files := []string{"docker/Dockerfile", "postgres/init.sh", "postgres/init.sql", "k8s/base/kustomization.yaml", "k8s/base/namespace.yaml", "k8s/base/configmap.yaml", "k8s/base/secret.example.yaml", "k8s/base/postgres.yaml", "k8s/base/redis.yaml", "k8s/base/gateway.yaml", "k8s/base/services.yaml", "k8s/dev/kustomization.yaml", "k8s/dev/secret.env.example", "monitoring/prometheus.yaml", "monitoring/grafana.yaml"}
 	for _, name := range files {
 		data, err := os.ReadFile(name)
 		if err != nil {
@@ -19,6 +19,33 @@ func TestDeploymentFilesExistAndContainNoBOM(t *testing.T) {
 		if bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}) {
 			t.Errorf("%s must not contain a UTF-8 BOM", name)
 		}
+	}
+}
+
+func TestComposePostgresHasSingleEntrypointInitScript(t *testing.T) {
+	data, err := os.ReadFile("docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "/docker-entrypoint-initdb.d/") != 1 {
+		t.Fatalf("compose must mount exactly one automatically scanned init file")
+	}
+	if !strings.Contains(text, "./postgres/init.sql:/opt/fitness-init/001-init.sql:ro") {
+		t.Fatal("compose must mount SQL outside /docker-entrypoint-initdb.d")
+	}
+}
+
+func TestPostgresInitScriptUsesLFAndNonScannedSQL(t *testing.T) {
+	data, err := os.ReadFile("postgres/init.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte{'\r', '\n'}) {
+		t.Fatal("postgres init.sh must use LF line endings")
+	}
+	if !bytes.Contains(data, []byte("-f /opt/fitness-init/001-init.sql")) {
+		t.Fatal("postgres init.sh must execute SQL from the non-scanned mount")
 	}
 }
 
