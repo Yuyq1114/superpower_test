@@ -47,6 +47,10 @@ func NewRouter(d *Dependencies) *gin.Engine {
 func NewRouterWithMetrics(d *Dependencies, metrics *observability.Metrics) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	HandleMethodNotAllowed := true
+	if HandleMethodNotAllowed {
+		r.HandleMethodNotAllowed = true
+	}
 	if d == nil {
 		d = &Dependencies{}
 	}
@@ -526,7 +530,17 @@ func gatewayMetrics(metrics *observability.Metrics) gin.HandlerFunc {
 		c.Next()
 		route := c.FullPath()
 		if route == "" {
-			route = "__unmatched__"
+
+			if c.Writer.Status() == nethttp.StatusMethodNotAllowed {
+
+				route = "__method_not_allowed__"
+
+			} else {
+
+				route = "__unmatched__"
+
+			}
+
 		}
 		method := c.Request.Method + " " + route + " " + strconv.Itoa(c.Writer.Status())
 		metrics.RequestsTotal.WithLabelValues("api-gateway", method).Inc()
