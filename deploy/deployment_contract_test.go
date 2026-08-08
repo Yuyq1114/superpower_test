@@ -79,3 +79,33 @@ func TestPostgresInitUsesQuotedPsqlVariablesForRolePasswords(t *testing.T) {
 		t.Fatal("postgres init must not use shell placeholders inside quoted heredoc")
 	}
 }
+
+func TestComposePostgresCredentialsAreSharedWithServices(t *testing.T) {
+	data, err := os.ReadFile("docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, variable := range []string{"POSTGRES_DB", "AUTH_DB_PASSWORD", "PLAN_DB_PASSWORD", "CHECKIN_DB_PASSWORD", "PROFILE_DB_PASSWORD", "STATISTICS_DB_PASSWORD"} {
+		if strings.Count(text, "${"+variable+":-") < 2 {
+			t.Errorf("docker-compose.yml must pass %s to postgres and owning service", variable)
+		}
+	}
+}
+
+func TestPostgresBusinessRolesCannotCreateArbitrarySchemas(t *testing.T) {
+	data, err := os.ReadFile("postgres/init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "GRANT CREATE ON DATABASE") {
+		t.Fatal("business roles must not receive database-level CREATE")
+	}
+	for _, role := range []string{"auth_service", "plan_service", "checkin_service", "profile_service", "statistics_service"} {
+		schema := strings.TrimSuffix(role, "_service") + "_schema"
+		if !strings.Contains(text, "GRANT USAGE, CREATE ON SCHEMA "+schema+" TO "+role) {
+			t.Errorf("%s must retain CREATE in its owned schema", role)
+		}
+	}
+}

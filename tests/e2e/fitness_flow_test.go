@@ -66,7 +66,7 @@ type summaryResponse struct {
 func TestFitnessFlow(t *testing.T) {
 	base := strings.TrimRight(os.Getenv("BASE_URL"), "/")
 	if base == "" {
-		t.Skip("BASE_URL is not set; start the complete stack and run `make test-e2e BASE_URL=http://localhost:8080`")
+		t.Fatal("BASE_URL is required for E2E tests; start the complete stack and run `BASE_URL=http://127.0.0.1:8080 make test-e2e`")
 	}
 	c := &client{baseURL: base, http: &http.Client{Timeout: 5 * time.Second}}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -101,6 +101,19 @@ func TestFitnessFlow(t *testing.T) {
 	must(t, c.do(ctx, "POST", "/api/v1/workout-days/"+day.WorkoutDay.ID+"/items", map[string]any{"item": map[string]any{"name": "Squat", "sets": 3, "repetitions": 5, "weight": 80, "duration_seconds": 600}}, "item-"+suffix, 201, &item))
 	if item.Item.ID == "" {
 		t.Fatal("empty item id")
+	}
+	var fetchedPlan, fetchedDay, fetchedItem map[string]any
+	must(t, c.do(ctx, "GET", "/api/v1/plans/"+plan.Plan.ID, nil, "", 200, &fetchedPlan))
+	if fetchedPlan["plan"].(map[string]any)["id"] != plan.Plan.ID || fetchedPlan["plan"].(map[string]any)["name"] != "E2E strength plan" {
+		t.Fatalf("plan query lost identity or name: %#v", fetchedPlan)
+	}
+	must(t, c.do(ctx, "GET", "/api/v1/plans/"+plan.Plan.ID+"/days/"+day.WorkoutDay.ID, nil, "", 200, &fetchedDay))
+	if fetchedDay["workout_day"].(map[string]any)["id"] != day.WorkoutDay.ID || fetchedDay["workout_day"].(map[string]any)["plan_id"] != plan.Plan.ID {
+		t.Fatalf("day query lost parent: %#v", fetchedDay)
+	}
+	must(t, c.do(ctx, "GET", "/api/v1/workout-days/"+day.WorkoutDay.ID+"/items/"+item.Item.ID, nil, "", 200, &fetchedItem))
+	if fetchedItem["item"].(map[string]any)["id"] != item.Item.ID || fetchedItem["item"].(map[string]any)["workout_day_id"] != day.WorkoutDay.ID || fetchedItem["item"].(map[string]any)["name"] != "Squat" {
+		t.Fatalf("item query lost parent or name: %#v", fetchedItem)
 	}
 	body := map[string]any{"workout_item_id": item.Item.ID, "date": today, "note": "e2e"}
 	key := "checkin-" + suffix

@@ -1,4 +1,4 @@
-﻿# Fitness Check-in MVP
+# Fitness Check-in MVP
 
 这是一个 Go 多服务健身打卡示例，Gateway 对外提供 REST API，内部服务通过 gRPC 通信，打卡事件通过 Redis Stream 异步送入统计服务。
 
@@ -20,7 +20,7 @@ Gateway 当前实际路由包括：注册/登录 `POST /api/v1/auth/register`、
 
 ## 配置与本地启动
 
-Compose 默认只使用本地开发凭据，默认值不得用于生产。可以用未跟踪的 `.env` 或环境变量覆盖 PostgreSQL、Redis、Gateway 端口和 `JWT_SECRET`。真实 secret 不应提交。
+Compose 默认只使用本地开发凭据，默认值不得用于生产。可以用未跟踪的 `.env` 或环境变量覆盖 PostgreSQL 数据库名、业务角色密码、Redis、Gateway 端口和 `JWT_SECRET`；Compose 会将这些变量一致传入数据库初始化与对应服务。真实 secret 不应提交。
 
 启动 PostgreSQL、Redis 及完整六服务栈：
 
@@ -53,11 +53,11 @@ powershell -ExecutionPolicy Bypass -File scripts/generate-proto.ps1
 ```bash
 make test                 # go test ./...
 make test-integration     # go test -tags=integration ./...
-go test ./tests/...       # E2E（未设置 BASE_URL 时明确跳过）
+go test ./tests/...       # E2E 必须设置 BASE_URL，否则明确失败
 BASE_URL=http://127.0.0.1:8080 make test-e2e
 ```
 
-E2E 会执行注册、登录、建计划、训练日、训练项目、打卡、相同幂等键重复打卡、身体指标和统计查询。统计查询最多轮询 20 秒，且验证重复打卡/重复事件最终只计一次。`make test-e2e` 强制要求 `BASE_URL`；服务不可达或业务断言失败都会失败，不会静默跳过。
+E2E 会执行注册、登录、建计划、训练日、训练项目、打卡、相同幂等键重复打卡、身体指标和统计查询。统计查询最多轮询 20 秒，且验证重复打卡最终只计一次；Redis Stream 的生产事件 payload 由契约测试覆盖，但完整栈 E2E 不直接重放 Redis 消息。`make test-e2e` 强制要求 `BASE_URL`；服务不可达或业务断言失败都会失败，不会静默跳过。
 
 ## Kubernetes
 

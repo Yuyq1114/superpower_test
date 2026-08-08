@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/fitness-checkin/pkg/workoutevent"
 	"github.com/example/fitness-checkin/services/statistics-service/internal/model"
 	"github.com/redis/go-redis/v9"
 )
@@ -319,20 +320,20 @@ func (c *Consumer) deliveryCount(ctx context.Context, id string) (int64, error) 
 }
 
 func parse(values map[string]any) (model.WorkoutCompleted, error) {
-	e := model.WorkoutCompleted{EventID: value(values, "event_id"), EventType: value(values, "event_type"), UserID: value(values, "user_id"), CheckinID: value(values, "checkin_id")}
-	var err error
-	if e.CompletedAt, err = time.Parse(time.RFC3339Nano, value(values, "completed_at")); err != nil {
+	event, err := workoutevent.Parse(values)
+	if err != nil {
+		return model.WorkoutCompleted{}, err
+	}
+	completedAt, err := time.Parse(time.RFC3339Nano, event.CompletedAt)
+	if err != nil {
 		return model.WorkoutCompleted{}, errors.New("invalid completed_at")
 	}
-	if e.OccurredAt, err = time.Parse(time.RFC3339Nano, value(values, "occurred_at")); err != nil {
+	occurredAt, err := time.Parse(time.RFC3339Nano, event.OccurredAt)
+	if err != nil {
 		return model.WorkoutCompleted{}, errors.New("invalid occurred_at")
 	}
-	if e.EventID == "" || e.EventType == "" || e.UserID == "" || e.CheckinID == "" {
-		return model.WorkoutCompleted{}, errors.New("missing stable event fields")
-	}
-	return e, nil
+	return model.WorkoutCompleted{EventID: event.EventID, EventType: event.EventType, UserID: event.UserID, CheckinID: event.CheckinID, CompletedAt: completedAt, OccurredAt: occurredAt}, nil
 }
-
 func value(values map[string]any, key string) string {
 	if v, ok := values[key]; ok {
 		return fmt.Sprint(v)

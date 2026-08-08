@@ -324,3 +324,18 @@ func TestValidateSettingsAcceptsCustomStreamsAndTTL(t *testing.T) {
 		t.Fatalf("ttl=%s", c.DedupeTTL)
 	}
 }
+
+func TestRedisStreamReplaysSameEventID(t *testing.T) {
+	seen := make(map[string]int)
+	c, r, _ := setupConsumer(t, func(_ context.Context, event model.WorkoutCompleted) error { seen[event.EventID]++; return nil })
+	values := validValues()
+	addEvent(t, r, values)
+	addEvent(t, r, values)
+	c.BatchSize = 2
+	if err := c.ReadOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if seen["event-1"] != 2 {
+		t.Fatalf("same event_id deliveries=%d, want 2", seen["event-1"])
+	}
+}

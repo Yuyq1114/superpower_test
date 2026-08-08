@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"github.com/example/fitness-checkin/pkg/storage"
+	"github.com/example/fitness-checkin/pkg/workoutevent"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/repository"
 	"github.com/redis/go-redis/v9"
 	"log/slog"
@@ -27,7 +28,7 @@ func (p *Publisher) PublishPending(ctx context.Context, n int) error {
 		if x.LeaseID == "" {
 			continue
 		}
-		if _, e = storage.AddStreamMessage(ctx, p.Redis, Stream, map[string]any{"event_id": x.EventID, "event_type": x.EventType, "user_id": x.UserID, "checkin_id": x.CheckinID, "completed_at": x.CompletedAt.UTC().Format(time.RFC3339Nano), "occurred_at": x.OccurredAt.UTC().Format(time.RFC3339Nano)}); e != nil {
+		if _, e = storage.AddStreamMessage(ctx, p.Redis, Stream, workoutevent.Fields(workoutevent.Event{EventID: x.EventID, EventType: x.EventType, UserID: x.UserID, CheckinID: x.CheckinID, CompletedAt: x.CompletedAt.UTC().Format(time.RFC3339Nano), OccurredAt: x.OccurredAt.UTC().Format(time.RFC3339Nano)})); e != nil {
 			if p.Failed != nil {
 				p.Failed()
 			}

@@ -1,10 +1,10 @@
-﻿-- Local development bootstrap only. Override POSTGRES_* and REDIS_PASSWORD
--- through an untracked .env file or the environment for other environments.
-CREATE ROLE auth_service LOGIN PASSWORD 'auth-local-only';
-CREATE ROLE plan_service LOGIN PASSWORD 'plan-local-only';
-CREATE ROLE checkin_service LOGIN PASSWORD 'checkin-local-only';
-CREATE ROLE profile_service LOGIN PASSWORD 'profile-local-only';
-CREATE ROLE statistics_service LOGIN PASSWORD 'statistics-local-only';
+-- Local development bootstrap only. PostgreSQL database and business role
+-- passwords are passed by docker-compose.yml; default values are local placeholders.
+CREATE ROLE auth_service LOGIN PASSWORD :'auth_db_password';
+CREATE ROLE plan_service LOGIN PASSWORD :'plan_db_password';
+CREATE ROLE checkin_service LOGIN PASSWORD :'checkin_db_password';
+CREATE ROLE profile_service LOGIN PASSWORD :'profile_db_password';
+CREATE ROLE statistics_service LOGIN PASSWORD :'statistics_db_password';
 
 CREATE SCHEMA IF NOT EXISTS auth_schema AUTHORIZATION auth_service;
 CREATE SCHEMA IF NOT EXISTS plan_schema AUTHORIZATION plan_service;
@@ -29,5 +29,4 @@ ALTER DEFAULT PRIVILEGES FOR ROLE profile_service IN SCHEMA profile_schema GRANT
 ALTER DEFAULT PRIVILEGES FOR ROLE statistics_service IN SCHEMA statistics_schema GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO statistics_service;
 ALTER DEFAULT PRIVILEGES FOR ROLE statistics_service IN SCHEMA statistics_schema GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO statistics_service;
 
-GRANT CONNECT ON DATABASE fitness TO auth_service, plan_service, checkin_service, profile_service, statistics_service;
-GRANT CREATE ON DATABASE fitness TO auth_service, plan_service, checkin_service, profile_service, statistics_service;
+GRANT CONNECT ON DATABASE :"postgres_db" TO auth_service, plan_service, checkin_service, profile_service, statistics_service;
