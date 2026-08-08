@@ -1,6 +1,9 @@
 package repository
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTableQuotesIdentifiers(t *testing.T) {
 	tests := []struct{ name, schema, table, want string }{
@@ -14,5 +17,17 @@ func TestTableQuotesIdentifiers(t *testing.T) {
 				t.Fatalf("table(%q, %q) = %q, want %q", tt.schema, tt.table, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMigrationSQLUsesOnlyRequestedSchema(t *testing.T) {
+	const schema = "statistics_test_0123456789abcdef0123456789abcdef"
+	for _, query := range migrationSQL(schema, false) {
+		if !strings.Contains(query, `"`+schema+`"`) {
+			t.Fatalf("migration query does not reference requested schema: %s", query)
+		}
+		if strings.Contains(query, DefaultSchema) {
+			t.Fatalf("migration query references fixed schema: %s", query)
+		}
 	}
 }
