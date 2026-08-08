@@ -96,7 +96,7 @@ func (r GORM) CreateWithEvent(ctx context.Context, c *model.Checkin, e *model.Ou
 
 	return r.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 
-		x := tx.Table(table(r.Schema, "checkins")).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "idempotency_key"}}, DoNothing: true}).Create(c)
+		x := tx.Table(table(r.Schema, "checkins")).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "idempotency_key"}}, TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "idempotency_key <> ''"}}}, DoNothing: true}).Create(c)
 
 		if x.Error != nil {
 

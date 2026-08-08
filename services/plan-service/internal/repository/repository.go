@@ -152,7 +152,11 @@ func (r GORM) ListItems(c context.Context, u, did string, page, size int) ([]mod
 }
 func (r GORM) GetItem(c context.Context, u, did, id string) (model.WorkoutItem, error) {
 	var i model.WorkoutItem
-	e := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Where("user_id = ? AND workout_day_id = ? AND id = ?", u, did, id).First(&i).Error
+	q := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Where("user_id = ? AND id = ?", u, id)
+	if did != "" {
+		q = q.Where("workout_day_id = ?", did)
+	}
+	e := q.First(&i).Error
 	return i, e
 }
 func (r GORM) UpdateItem(c context.Context, i *model.WorkoutItem) error {

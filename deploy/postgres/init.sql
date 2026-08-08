@@ -28,3 +28,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE profile_service IN SCHEMA profile_schema GRANT
 ALTER DEFAULT PRIVILEGES FOR ROLE profile_service IN SCHEMA profile_schema GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO profile_service;
 ALTER DEFAULT PRIVILEGES FOR ROLE statistics_service IN SCHEMA statistics_schema GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO statistics_service;
 ALTER DEFAULT PRIVILEGES FOR ROLE statistics_service IN SCHEMA statistics_schema GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO statistics_service;
+
+GRANT CONNECT ON DATABASE fitness TO auth_service, plan_service, checkin_service, profile_service, statistics_service;
+GRANT CREATE ON DATABASE fitness TO auth_service, plan_service, checkin_service, profile_service, statistics_service;

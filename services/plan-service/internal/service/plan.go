@@ -258,8 +258,8 @@ func (s *Service) GetWorkoutItem(c context.Context, u, did, iid string) (model.W
 	if e := validateUser(u); e != nil {
 		return model.WorkoutItem{}, e
 	}
-	if did == "" || iid == "" {
-		return model.WorkoutItem{}, apperror.InvalidArgument("workout_day_id and workout_item_id are required")
+	if iid == "" {
+		return model.WorkoutItem{}, apperror.InvalidArgument("workout_item_id is required")
 	}
 	return s.repo.GetItem(c, u, did, iid)
 }

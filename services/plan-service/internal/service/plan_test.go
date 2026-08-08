@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type fakeRepo struct{}
+type fakeRepo struct{ item model.WorkoutItem }
 
 func (fakeRepo) CreatePlan(context.Context, *model.Plan) error { return nil }
 func (fakeRepo) GetPlan(context.Context, string, string) (model.Plan, error) {
@@ -26,8 +26,8 @@ func (fakeRepo) GetDay(context.Context, string, string, string) (model.WorkoutDa
 func (fakeRepo) UpdateDay(context.Context, *model.WorkoutDay) error      { return nil }
 func (fakeRepo) DeleteDay(context.Context, string, string, string) error { return nil }
 func (fakeRepo) CreateItem(context.Context, *model.WorkoutItem) error    { return nil }
-func (fakeRepo) GetItem(context.Context, string, string, string) (model.WorkoutItem, error) {
-	return model.WorkoutItem{}, nil
+func (f fakeRepo) GetItem(context.Context, string, string, string) (model.WorkoutItem, error) {
+	return f.item, nil
 }
 func (fakeRepo) UpdateItem(context.Context, *model.WorkoutItem) error     { return nil }
 func (fakeRepo) DeleteItem(context.Context, string, string, string) error { return nil }
@@ -53,5 +53,13 @@ func TestValidation(t *testing.T) {
 	}
 	if apperror.CodeOf(func() error { _, e := s.ListPlans(context.Background(), "u", 0, 10); return e }()) != apperror.CodeInvalidArgument {
 		t.Fatal("page")
+	}
+}
+
+func TestGetWorkoutItemAllowsLookupByItemIDWithoutDayID(t *testing.T) {
+	repo := fakeRepo{item: model.WorkoutItem{ID: "item-1", UserID: "user-1"}}
+	got, err := New(repo).GetWorkoutItem(context.Background(), "user-1", "", "item-1")
+	if err != nil || got.ID != "item-1" {
+		t.Fatalf("GetWorkoutItem() = %+v, %v", got, err)
 	}
 }
