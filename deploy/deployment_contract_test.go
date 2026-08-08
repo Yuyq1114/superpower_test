@@ -49,6 +49,19 @@ func TestPostgresInitScriptUsesLFAndNonScannedSQL(t *testing.T) {
 	}
 }
 
+func TestKubernetesPostgresUsesWritablePGDataSubdirectory(t *testing.T) {
+	data, err := os.ReadFile("k8s/base/postgres.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "name: PGDATA") || !strings.Contains(text, "value: /var/lib/postgresql/data/pgdata") {
+		t.Fatal("Kubernetes Postgres must place PGDATA in a writable PVC subdirectory")
+	}
+	if !strings.Contains(text, "runAsNonRoot: true") {
+		t.Fatal("Kubernetes Postgres must remain non-root")
+	}
+}
 func TestSecretExampleIsNotRendered(t *testing.T) {
 	data, err := os.ReadFile("k8s/base/kustomization.yaml")
 	if err != nil {
@@ -74,18 +87,19 @@ func TestApplicationDeploymentsDeclareOperationalSafety(t *testing.T) {
 	}
 }
 
-func TestDevKustomizationRequiresLocalSecretFile(t *testing.T) {
+func TestDevKustomizationUsesIgnoredLocalSecretFile(t *testing.T) {
 	path := "k8s/dev/secret.env"
-	if _, err := os.Stat(path); err == nil {
-		t.Fatal("secret.env must remain untracked and absent from the repository")
+	ignored := exec.Command("git", "check-ignore", "--quiet", "deploy/"+path)
+	ignored.Dir = ".."
+	if err := ignored.Run(); err != nil {
+		t.Fatal("secret.env must remain ignored by Git")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Skip("local secret.env is absent; skipping dev overlay render")
 	}
 	cmd := exec.Command("kubectl", "kustomize", "k8s/dev")
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatal("kustomize unexpectedly succeeded without secret.env")
-	}
-	if !strings.Contains(string(output), "secret.env") {
-		t.Fatalf("failure must explain missing secret.env: %s", output)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("render dev overlay: %v: %s", err, output)
 	}
 }
 

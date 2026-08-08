@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/fitness-checkin/pkg/storage"
 	"github.com/example/fitness-checkin/services/statistics-service/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -24,7 +25,7 @@ func quoteIdentifier(identifier string) string {
 	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
 
-func migrationSQL(schema string, createSchema bool) []string {
+func migrationSQL(schema string, _ ...bool) []string {
 	s := quoteIdentifier(schema)
 	queries := []string{
 		"CREATE TABLE IF NOT EXISTS " + s + ".processed_events (event_id text PRIMARY KEY, processed_at timestamptz NOT NULL)",
@@ -32,22 +33,22 @@ func migrationSQL(schema string, createSchema bool) []string {
 		"CREATE TABLE IF NOT EXISTS " + s + ".active_days (user_id text NOT NULL, period text NOT NULL CHECK (period IN ('week','month')), bucket_start timestamptz NOT NULL, activity_date date NOT NULL, PRIMARY KEY(user_id,period,bucket_start,activity_date), FOREIGN KEY(user_id,period,bucket_start) REFERENCES " + s + ".summaries(user_id,period,bucket_start) ON DELETE CASCADE)",
 		"CREATE INDEX IF NOT EXISTS summaries_user_period_bucket_idx ON " + s + ".summaries(user_id,period,bucket_start)",
 	}
-	if createSchema {
-		queries = append([]string{"CREATE SCHEMA IF NOT EXISTS " + s}, queries...)
-	}
 	return queries
 }
 
 func Migrate(ctx context.Context, db *gorm.DB) error {
-	return migrateSchema(ctx, db, DefaultSchema, true)
+	return MigrateSchema(ctx, db, DefaultSchema)
 }
 
 func MigrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
-	return migrateSchema(ctx, db, schema, false)
+	if err := storage.RequirePostgresSchema(ctx, db, schema); err != nil {
+		return fmt.Errorf("statistics migration: %w", err)
+	}
+	return migrateSchema(ctx, db, schema)
 }
 
-func migrateSchema(ctx context.Context, db *gorm.DB, schema string, createSchema bool) error {
-	for _, query := range migrationSQL(schema, createSchema) {
+func migrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
+	for _, query := range migrationSQL(schema) {
 		if err := db.WithContext(ctx).Exec(query).Error; err != nil {
 			return fmt.Errorf("statistics migration: %w", err)
 		}

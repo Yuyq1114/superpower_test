@@ -22,7 +22,7 @@ func TestIntegrationMigrateAndCreate(t *testing.T) {
 	schema := "plan_test_" + uuid.NewString()[:8]
 	old := DefaultSchema
 	_ = old
-	if e = db.Exec("CREATE SCHEMA IF NOT EXISTS \"" + schema + "\"").Error; e != nil {
+	if e = db.Exec("CREATE SCHEMA \"" + schema + "\"").Error; e != nil {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { db.Exec("DROP SCHEMA IF EXISTS \"" + schema + "\" CASCADE") })
@@ -33,7 +33,4 @@ func TestIntegrationMigrateAndCreate(t *testing.T) {
 	if e = (GORM{DB: db, Schema: schema}).CreatePlan(context.Background(), &p); e != nil {
 		t.Fatal(e)
 	}
-}
-func MigrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
-	return migrateSchema(ctx, db, schema)
 }

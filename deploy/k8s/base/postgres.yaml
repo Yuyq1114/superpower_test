@@ -23,12 +23,27 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70, seccompProfile: {type: RuntimeDefault}}
+      initContainers:
+        - name: migrate-pgdata
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, /opt/fitness/migrate-pgdata.sh]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: pgdata-migration, mountPath: /opt/fitness/migrate-pgdata.sh, subPath: migrate-pgdata.sh, readOnly: true}
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [CHOWN, DAC_OVERRIDE, FOWNER]}
       containers:
         - name: postgres
           image: postgres:16-alpine
           imagePullPolicy: IfNotPresent
           ports: [{name: postgres, containerPort: 5432}]
           env:
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
             - {name: POSTGRES_DB, value: fitness}
             - {name: POSTGRES_USER, value: fitness_admin}
             - name: POSTGRES_PASSWORD
@@ -52,6 +67,8 @@ spec:
           resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
       volumes:
+        - name: pgdata-migration
+          configMap: {name: postgres-pgdata-migration, defaultMode: 0550}
         - name: init
           configMap: {name: postgres-init, defaultMode: 0550}
   volumeClaimTemplates:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/example/fitness-checkin/pkg/storage"
 	"github.com/example/fitness-checkin/services/auth-service/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -16,21 +17,26 @@ func MigrateSchema(ctx context.Context, db *gorm.DB, schema string) error {
 	if schema == "" || schema != DefaultSchema && !validSchema(schema) {
 		return fmt.Errorf("invalid auth schema")
 	}
-	q := quoteIdentifier(schema)
+	if err := storage.RequirePostgresSchema(ctx, db, schema); err != nil {
+		return fmt.Errorf("auth migration: %w", err)
+	}
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		statements := []string{
-			"CREATE SCHEMA IF NOT EXISTS " + q,
-			"CREATE TABLE IF NOT EXISTS " + q + ".users (id text PRIMARY KEY, email text NOT NULL UNIQUE, password_hash text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)",
-			"CREATE TABLE IF NOT EXISTS " + q + ".refresh_tokens (id text PRIMARY KEY, user_id text NOT NULL REFERENCES " + q + ".users(id) ON DELETE CASCADE, token_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL, revoked_at timestamptz NULL, created_at timestamptz NOT NULL)",
-			"CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON " + q + ".refresh_tokens(user_id)",
-		}
-		for _, statement := range statements {
+		for _, statement := range migrationSQL(schema) {
 			if err := tx.Exec(statement).Error; err != nil {
-				return err
+				return fmt.Errorf("auth migration: %w", err)
 			}
 		}
 		return nil
 	})
+}
+
+func migrationSQL(schema string) []string {
+	q := quoteIdentifier(schema)
+	return []string{
+		"CREATE TABLE IF NOT EXISTS " + q + ".users (id text PRIMARY KEY, email text NOT NULL UNIQUE, password_hash text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)",
+		"CREATE TABLE IF NOT EXISTS " + q + ".refresh_tokens (id text PRIMARY KEY, user_id text NOT NULL REFERENCES " + q + ".users(id) ON DELETE CASCADE, token_hash text NOT NULL UNIQUE, expires_at timestamptz NOT NULL, revoked_at timestamptz NULL, created_at timestamptz NOT NULL)",
+		"CREATE INDEX IF NOT EXISTS refresh_tokens_user_id_idx ON " + q + ".refresh_tokens(user_id)",
+	}
 }
 func validSchema(value string) bool {
 	if len(value) == 0 || len(value) > 50 {
