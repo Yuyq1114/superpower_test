@@ -1,8 +1,11 @@
+//go:build integration
+
 package repository
 
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,24 +18,46 @@ import (
 
 func integrationDB(t *testing.T) (*gorm.DB, string) {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_DSN")
-	if dsn == "" {
-		t.Skip("TEST_DATABASE_DSN is not set; skipping PostgreSQL integration test")
+	adminDSN := os.Getenv("TEST_DATABASE_ADMIN_DSN")
+	businessDSN := os.Getenv("TEST_DATABASE_DSN")
+	if adminDSN == "" || businessDSN == "" {
+		t.Skip("TEST_DATABASE_ADMIN_DSN and TEST_DATABASE_DSN are required; skipping PostgreSQL integration test")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+
+	ctx := context.Background()
+	businessDB, err := gorm.Open(postgres.Open(businessDSN), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := "auth_test_" + uuid.NewString()[:8]
-	if err := MigrateSchema(context.Background(), db, schema); err != nil {
+	var businessRole string
+	if err := businessDB.WithContext(ctx).Raw("SELECT current_user").Scan(&businessRole).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !validSchema(businessRole) {
+		t.Fatalf("business database role is not a safe identifier: %q", businessRole)
+	}
+
+	adminDB, err := gorm.Open(postgres.Open(adminDSN), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := "auth_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	if err := adminDB.WithContext(ctx).Exec("CREATE SCHEMA " + quoteIdentifier(schema) + " AUTHORIZATION " + quoteIdentifier(businessRole)).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = db.Exec("DROP SCHEMA IF EXISTS " + quoteIdentifier(schema) + " CASCADE").Error
-		sqlDB, _ := db.DB()
-		_ = sqlDB.Close()
+		_ = adminDB.Exec("DROP SCHEMA IF EXISTS " + quoteIdentifier(schema) + " CASCADE").Error
+		if sqlDB, err := businessDB.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+		if sqlDB, err := adminDB.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
 	})
-	return db, schema
+	if err := MigrateSchema(ctx, businessDB, schema); err != nil {
+		t.Fatal(err)
+	}
+	return businessDB, schema
 }
 
 func TestIntegrationCreateUserWithRefreshTokenRollsBack(t *testing.T) {
