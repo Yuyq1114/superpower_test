@@ -1,0 +1,9 @@
+.git
+.worktrees
+.superpowers
+.env
+.env.*
+deploy/k8s/dev/secret.env
+**/*_test.go
+**/*.md
+bin

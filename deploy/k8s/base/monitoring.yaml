@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: fitness-services
+        metrics_path: /metrics
+        static_configs:
+          - targets:
+              - api-gateway:8080
+              - auth-service:8080
+              - plan-service:8080
+              - checkin-service:8080
+              - profile-service:8080
+              - statistics-service:8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: prometheus}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: prometheus, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, fsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.5.0
+          args: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.path=/prometheus]
+          ports: [{name: http, containerPort: 9090}]
+          volumeMounts: [{name: config, mountPath: /etc/prometheus, readOnly: true}, {name: data, mountPath: /prometheus}]
+          readinessProbe: {httpGet: {path: /-/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /-/healthy, port: http}, periodSeconds: 10}
+          resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+      volumes: [{name: config, configMap: {name: prometheus-config}}, {name: data, emptyDir: {sizeLimit: 1Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prometheus}
+spec:
+  selector: {app.kubernetes.io/name: prometheus}
+  ports: [{name: http, port: 9090, targetPort: http}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: grafana-provisioning}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        url: http://prometheus:9090
+        access: proxy
+        isDefault: true
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: Fitness
+        folder: Fitness
+        type: file
+        options: {path: /var/lib/grafana/dashboards}
+  fitness.json: |
+    {"title":"Fitness Services","uid":"fitness-services","schemaVersion":39,"refresh":"15s","panels":[{"type":"timeseries","title":"Request rate","targets":[{"expr":"sum by (service) (rate(fitness_checkin_requests_total[5m]))"}]},{"type":"timeseries","title":"Error rate","targets":[{"expr":"sum by (service) (rate(fitness_checkin_errors_total[5m]))"}]},{"type":"timeseries","title":"P95 latency","targets":[{"expr":"histogram_quantile(0.95, sum by (le, service) (rate(fitness_checkin_request_duration_seconds_bucket[5m])))"}]},{"type":"stat","title":"Service readiness","targets":[{"expr":"up{job=\"fitness-services\"}"}]},{"type":"timeseries","title":"Statistics retries and DLQ","targets":[{"expr":"rate(fitness_checkin_statistics_event_retries_total[5m])"},{"expr":"rate(fitness_checkin_statistics_event_dlq_total[5m])"}]},{"type":"timeseries","title":"Statistics consumer lag","targets":[{"expr":"fitness_checkin_statistics_consumer_lag"}]}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: grafana}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app.kubernetes.io/name: grafana}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: grafana, app.kubernetes.io/part-of: fitness-checkin}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 472, runAsGroup: 472, fsGroup: 472, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.1.0
+          ports: [{name: http, containerPort: 3000}]
+          env:
+            - {name: GF_SECURITY_ADMIN_USER, value: admin}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: fitness-secrets, key: GRAFANA_ADMIN_PASSWORD}}
+          volumeMounts: [{name: provisioning, mountPath: /etc/grafana/provisioning/datasources/datasources.yaml, subPath: datasources.yaml, readOnly: true}, {name: provisioning, mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml, subPath: dashboards.yaml, readOnly: true}, {name: provisioning, mountPath: /var/lib/grafana/dashboards/fitness.json, subPath: fitness.json, readOnly: true}, {name: data, mountPath: /var/lib/grafana}]
+          readinessProbe: {httpGet: {path: /api/health, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /api/health, port: http}, periodSeconds: 10}
+          resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+      volumes: [{name: provisioning, configMap: {name: grafana-provisioning}}, {name: data, emptyDir: {sizeLimit: 512Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: grafana}
+spec:
+  selector: {app.kubernetes.io/name: grafana}
+  ports: [{name: http, port: 3000, targetPort: http}]

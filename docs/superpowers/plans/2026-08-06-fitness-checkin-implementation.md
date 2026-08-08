@@ -1,4 +1,4 @@
-﻿# 健身打卡计划微服务 Implementation Plan
+# 健身打卡计划微服务 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -33,7 +33,7 @@
 **Interfaces:**
 - `apperror.Code`：`InvalidArgument`, `Unauthenticated`, `PermissionDenied`, `NotFound`, `Conflict`, `Internal`。
 - `config.Load(service string) (Config, error)` 读取环境变量并拒绝缺失的必需配置。
-- Protobuf 服务定义请求/响应、分页字段和稳定错误码映射；生成代码放在各服务 `internal/gen/`，禁止手工修改。
+- Protobuf 服务定义请求/响应、分页字段和稳定错误码映射；生成代码放在仓库公共 `proto/gen/`，禁止手工修改。
 
 - [ ] 写配置缺失、默认值和错误码映射的失败测试。
 - [ ] 运行 `go test ./pkg/...`，预期新增测试先失败。

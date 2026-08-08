@@ -1,0 +1,9 @@
+syntax = "proto3";
+package profile.v1;
+option go_package = "github.com/example/fitness-checkin/proto/gen/profile/v1;profilev1";
+message Metric { string id = 1; string user_id = 2; string metric_type = 3; double value = 4; string unit = 5; string recorded_at = 6; }
+message RecordMetricRequest { string user_id = 1; string metric_type = 2; double value = 3; string unit = 4; string recorded_at = 5; string idempotency_key = 6; }
+message RecordMetricResponse { Metric metric = 1; }
+message ListMetricsRequest { string user_id = 1; string metric_type = 2; string from = 3; string to = 4; }
+message ListMetricsResponse { repeated Metric metrics = 1; }
+service ProfileService { rpc RecordMetric(RecordMetricRequest) returns (RecordMetricResponse); rpc ListMetrics(ListMetricsRequest) returns (ListMetricsResponse); }

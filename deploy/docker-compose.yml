@@ -1,0 +1,126 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fitness}
+      POSTGRES_USER: ${POSTGRES_USER:-fitness}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-local-only}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:-auth-local-only}
+      PLAN_DB_PASSWORD: ${PLAN_DB_PASSWORD:-plan-local-only}
+      CHECKIN_DB_PASSWORD: ${CHECKIN_DB_PASSWORD:-checkin-local-only}
+      PROFILE_DB_PASSWORD: ${PROFILE_DB_PASSWORD:-profile-local-only}
+      STATISTICS_DB_PASSWORD: ${STATISTICS_DB_PASSWORD:-statistics-local-only}
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/001-init.sh:ro
+      - ./postgres/init.sql:/opt/fitness-init/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: '${REDIS_PASSWORD:-redis-local-only}'
+    ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
+    command: ["sh", "-c", 'redis-server /usr/local/etc/redis/redis.conf --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  auth-service:
+    build: {context: .., dockerfile: deploy/docker/Dockerfile, args: {SERVICE: auth-service}}
+    environment: &auth-env
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-fitness}
+      DB_USER: auth_service
+      DB_PASSWORD: ${AUTH_DB_PASSWORD:-auth-local-only}
+      DB_SCHEMA: auth_schema
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret}
+      HTTP_PORT: 8080
+      GRPC_PORT: 9090
+    depends_on: {postgres: {condition: service_healthy}}
+  plan-service:
+    build: {context: .., dockerfile: deploy/docker/Dockerfile, args: {SERVICE: plan-service}}
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-fitness}
+      DB_USER: plan_service
+      DB_PASSWORD: ${PLAN_DB_PASSWORD:-plan-local-only}
+      DB_SCHEMA: plan_schema
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret}
+      HTTP_PORT: 8080
+      GRPC_PORT: 9090
+    depends_on: {postgres: {condition: service_healthy}}
+  checkin-service:
+    build: {context: .., dockerfile: deploy/docker/Dockerfile, args: {SERVICE: checkin-service}}
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-fitness}
+      DB_USER: checkin_service
+      DB_PASSWORD: ${CHECKIN_DB_PASSWORD:-checkin-local-only}
+      DB_SCHEMA: checkin_schema
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-local-only}
+      PLAN_SERVICE_ADDR: plan-service:9090
+      HTTP_PORT: 8080
+      GRPC_PORT: 9090
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}, plan-service: {condition: service_started}}
+  profile-service:
+    build: {context: .., dockerfile: deploy/docker/Dockerfile, args: {SERVICE: profile-service}}
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-fitness}
+      DB_USER: profile_service
+      DB_PASSWORD: ${PROFILE_DB_PASSWORD:-profile-local-only}
+      DB_SCHEMA: profile_schema
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret}
+      HTTP_PORT: 8080
+      GRPC_PORT: 9090
+    depends_on: {postgres: {condition: service_healthy}}
+  statistics-service:
+    build: {context: .., dockerfile: deploy/docker/Dockerfile, args: {SERVICE: statistics-service}}
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-fitness}
+      DB_USER: statistics_service
+      DB_PASSWORD: ${STATISTICS_DB_PASSWORD:-statistics-local-only}
+      DB_SCHEMA: statistics_schema
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-local-only}
+      HTTP_PORT: 8080
+      GRPC_PORT: 9090
+    depends_on: {postgres: {condition: service_healthy}, redis: {condition: service_healthy}}
+  api-gateway:
+    build: {context: .., dockerfile: deploy/docker/Dockerfile, args: {SERVICE: api-gateway}}
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret}
+      HTTP_PORT: 8080
+      AUTH_GRPC_ADDR: auth-service:9090
+      PLAN_GRPC_ADDR: plan-service:9090
+      CHECKIN_GRPC_ADDR: checkin-service:9090
+      PROFILE_GRPC_ADDR: profile-service:9090
+      STATISTICS_GRPC_ADDR: statistics-service:9090
+    ports: ["127.0.0.1:${GATEWAY_PORT:-8080}:8080"]
+    depends_on:
+      auth-service: {condition: service_started}
+      plan-service: {condition: service_started}
+      checkin-service: {condition: service_started}
+      profile-service: {condition: service_started}
+      statistics-service: {condition: service_started}
+volumes:
+  postgres-data:
+  redis-data:
