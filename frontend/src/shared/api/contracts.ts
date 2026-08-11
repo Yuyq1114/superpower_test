@@ -15,5 +15,12 @@ export type Checkin = {
   note: string;
   completed_at: string;
 };
-export type Metric = { id: string; metric_type: "weight" | "body_fat"; value: number; unit: "kg" | "percent"; recorded_at: string };
+export type Metric = {
+  id: string;
+  user_id?: string;
+  metric_type: "weight" | "body_fat";
+  value: number;
+  unit: "kg" | "percent";
+  recorded_at: string;
+};
 export type Summary = { user_id: string; period: 1 | 2; start: string; end: string; workout_count: number; active_days: number; total_duration_seconds: number };

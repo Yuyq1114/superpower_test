@@ -8,7 +8,9 @@ import { LoginPage } from "../features/auth/LoginPage";
 import { RegisterPage } from "../features/auth/RegisterPage";
 import { RequireSession } from "../features/auth/RequireSession";
 import { SessionProvider } from "../features/auth/SessionProvider";
+import { BodyMetricsPage } from "../features/body-metrics/BodyMetricsPage";
 import { CheckinPage } from "../features/checkins/CheckinPage";
+import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { HistoryPage } from "../features/history/HistoryPage";
 import { PlanDetailPage } from "../features/plans/PlanDetailPage";
 import { PlansPage } from "../features/plans/PlansPage";
@@ -30,12 +32,12 @@ export function App() {
                 </RequireSession>
               }
             >
-              <Route path="/" element={<h1>今日训练</h1>} />
+              <Route path="/" element={<DashboardPage />} />
               <Route path="/plans" element={<PlansPage />} />
               <Route path="/plans/:planId" element={<PlanDetailPage />} />
               <Route path="/checkins" element={<CheckinPage />} />
               <Route path="/history" element={<HistoryPage />} />
-              <Route path="/profile" element={<p>身体数据占位</p>} />
+              <Route path="/profile" element={<BodyMetricsPage />} />
             </Route>
           </Routes>
         </SessionProvider>
