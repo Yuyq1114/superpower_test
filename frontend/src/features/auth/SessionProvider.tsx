@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { apiRequest, setAccessToken } from "../../shared/api/client";
+import { ApiError, apiRequest, setAccessToken } from "../../shared/api/client";
 import type { AuthResponse, RefreshResponse, User } from "../../shared/api/contracts";
 
 export type SessionStatus = "loading" | "authenticated" | "anonymous";
@@ -12,6 +12,15 @@ export type SessionContextValue = {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /**
+   * Drops all local session state -- access token, cached query data, and
+   * the in-memory user -- without calling the server. This does NOT claim
+   * the server-side session was actually revoked; it exists purely as an
+   * explicit escape hatch for a caller that has given up on reaching the
+   * server (e.g. after `logout()` keeps rejecting with a 5xx/network
+   * error) and wants to stop being stuck in an authenticated-looking UI.
+   */
+  clearLocalSession: () => void;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -63,21 +72,43 @@ export function SessionProvider(props: { children: ReactNode }) {
     setStatus("authenticated");
   }
 
-  async function logout() {
-    // Only a confirmed server-side logout (2xx) may clear local session
-    // state and cached query data. A network error or 5xx must propagate to
-    // the caller with local state untouched, instead of faking a successful
-    // logout: the refresh cookie is still valid server-side, so silently
-    // clearing the in-memory access token here would strand the user in an
-    // inconsistent "looks logged out, isn't really" state.
-    await apiRequest<void>("/auth/logout", { method: "POST" });
+  function clearLocalSession() {
     queryClient.clear();
     setAccessToken(null);
     setUser(null);
     setStatus("anonymous");
   }
 
-  const value: SessionContextValue = { status, user, login, register, logout };
+  async function logout() {
+    try {
+      // A confirmed server-side logout (2xx) clears local session state and
+      // cached query data below.
+      await apiRequest<void>("/auth/logout", { method: "POST" });
+    } catch (error) {
+      // A 4xx here -- most commonly 401/403, including the 401 `apiRequest`
+      // itself surfaces after its own automatic refresh-retry also fails --
+      // means the server is telling us the refresh cookie/session is
+      // already missing or invalid. There is nothing left server-side to
+      // revoke, so this is an idempotent "already logged out", not a
+      // failure: treat it the same as a confirmed 2xx instead of leaving the
+      // UI stuck "authenticated" with an access token that's already been
+      // cleared (that combination can never successfully retry, since every
+      // subsequent request 401s with no token and no valid refresh cookie
+      // either).
+      //
+      // Only a 5xx or network error means the server might still hold a
+      // live session we failed to revoke, so those must propagate with
+      // local state untouched instead of faking success.
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        clearLocalSession();
+        return;
+      }
+      throw error;
+    }
+    clearLocalSession();
+  }
+
+  const value: SessionContextValue = { status, user, login, register, logout, clearLocalSession };
 
   return <SessionContext.Provider value={value}>{props.children}</SessionContext.Provider>;
 }

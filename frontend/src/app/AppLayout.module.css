@@ -20,13 +20,30 @@
   top: var(--space-4);
 }
 
+/*
+ * Deliberately NOT `position: fixed`/overlaying: a failed logout is real
+ * feedback the user needs to read and act on, but it must never block the
+ * top of the page or force itself over content the user was already
+ * looking at. Rendering it in normal flow at the top of `.main` (rather
+ * than in `.sidebar`, where it would either overflow the single-row mobile
+ * bottom bar or force it onto a second row) keeps it visible without ever
+ * fighting the layout of either region.
+ */
 .logoutError {
-  position: fixed;
-  inset: 0 0 auto;
-  z-index: 30;
   background: var(--color-surface);
-  border-bottom: 1px solid var(--color-danger);
-  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-danger);
+  border-radius: 8px;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.logoutErrorHint {
+  color: var(--color-muted);
+  font-size: 0.875rem;
 }
 
 .sidebar {
@@ -71,10 +88,24 @@
    * last (`order: 2`, so it sticks to the bottom of the scrollport) while
    * staying first in the DOM (so the skip link and keyboard/tab order still
    * reach primary navigation before page content).
+   *
+   * `--bottom-nav-*` are the single source of truth for the bottom bar's
+   * size: `.sidebar`/`.navLink`/`.sidebar button` consume the building
+   * blocks directly (so they actually render at this size), and `.main`
+   * consumes the derived `--bottom-nav-height` to reserve exactly that much
+   * space. Changing the touch target or padding here automatically keeps
+   * both sides in sync instead of requiring a second hand-maintained
+   * `calc()` to be updated in lockstep.
    */
   .appShell {
     display: flex;
     flex-direction: column;
+    --bottom-nav-touch-target: 44px;
+    --bottom-nav-padding-block: var(--space-2);
+    --bottom-nav-border: 1px;
+    --bottom-nav-height: calc(
+      var(--bottom-nav-touch-target) + var(--bottom-nav-padding-block) * 2 + var(--bottom-nav-border)
+    );
   }
 
   /*
@@ -98,9 +129,10 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
-    padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom));
+    padding: var(--bottom-nav-padding-block) var(--space-2)
+      calc(var(--bottom-nav-padding-block) + env(safe-area-inset-bottom));
     border: 0;
-    border-top: 1px solid var(--color-border);
+    border-top: var(--bottom-nav-border) solid var(--color-border);
   }
 
   .brand {
@@ -119,8 +151,8 @@
 
   .navLink {
     flex: 0 1 auto;
-    min-width: 44px;
-    min-height: 44px;
+    min-width: var(--bottom-nav-touch-target);
+    min-height: var(--bottom-nav-touch-target);
     padding: var(--space-1);
     justify-content: center;
     font-size: 0.75rem;
@@ -133,8 +165,8 @@
      component used everywhere else. */
   .sidebar button {
     flex: 0 0 auto;
-    min-width: 44px;
-    min-height: 44px;
+    min-width: var(--bottom-nav-touch-target);
+    min-height: var(--bottom-nav-touch-target);
     padding: var(--space-1) var(--space-2) !important;
     font-size: 0.75rem !important;
     white-space: nowrap;
@@ -144,16 +176,15 @@
    * `position: sticky` keeps the bottom bar correctly anchored to the
    * viewport, but (unlike a reserved layout region) doesn't stop `.main`'s
    * own content from flowing underneath it -- the bar simply paints on top.
-   * Reserving the bar's height (44px touch target + its own vertical
-   * padding/border + safe-area-inset) as `.main`'s padding-bottom keeps the
-   * document's actual last line of content above where the bar paints,
-   * the same way the old fixed-position layout reserved space via
-   * `.appShell`'s padding-bottom.
+   * Reserving `--bottom-nav-height` (derived from the same building blocks
+   * `.sidebar` actually renders with, see `.appShell` above) as `.main`'s
+   * padding-bottom keeps the document's actual last line of content above
+   * where the bar paints, the same way the old fixed-position layout
+   * reserved space via `.appShell`'s padding-bottom.
    */
   .main {
     order: 1;
     flex: 1 0 auto;
-    padding: var(--space-4) var(--space-4)
-      calc(var(--space-4) + 44px + var(--space-2) * 2 + 1px + env(safe-area-inset-bottom));
+    padding: var(--space-4) var(--space-4) calc(var(--space-4) + var(--bottom-nav-height) + env(safe-area-inset-bottom));
   }
 }

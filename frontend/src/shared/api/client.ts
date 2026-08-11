@@ -18,6 +18,11 @@ export function setAccessToken(token: string | null) {
   accessToken = token;
 }
 
+/** Exposed primarily for tests to assert the in-memory token was actually dropped. */
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
 async function parse<T>(response: Response): Promise<T> {
   if (response.ok) return response.status === 204 ? (undefined as T) : response.json();
   const body = await response.json() as ApiErrorBody;

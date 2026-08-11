@@ -89,7 +89,11 @@ func (s *Service) ListHistory(ctx context.Context, u string, from, to time.Time,
 	if e != nil {
 		return Page[model.Checkin]{}, e
 	}
-	result.Streak = CurrentStreak(dates, time.Now().UTC())
+	// `to` is the caller's own local notion of "today" (validated non-zero
+	// above); using the server's own wall clock here instead would silently
+	// disagree with it for roughly half of each day for any caller whose
+	// timezone isn't UTC, truncating a real streak to 0.
+	result.Streak = CurrentStreak(dates, to.UTC())
 	return result, nil
 }
 func CurrentStreak(ds []time.Time, now time.Time) int {

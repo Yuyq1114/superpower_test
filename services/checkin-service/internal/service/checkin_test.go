@@ -11,6 +11,7 @@ import (
 type fakeRepo struct {
 	err   error
 	calls int
+	dates []time.Time
 }
 
 func (f *fakeRepo) CreateWithEvent(context.Context, *model.Checkin, *model.OutboxEvent) error {
@@ -21,7 +22,7 @@ func (f *fakeRepo) List(context.Context, string, time.Time, time.Time, int, int)
 	return nil, 0, nil
 }
 func (f *fakeRepo) ListDates(context.Context, string, time.Time, time.Time) ([]time.Time, error) {
-	return nil, nil
+	return f.dates, nil
 }
 func (f *fakeRepo) PendingEvents(context.Context, int) ([]model.OutboxEvent, error) { return nil, nil }
 func (f *fakeRepo) MarkPublished(context.Context, string, string, time.Time) error  { return nil }
@@ -51,5 +52,32 @@ func TestCurrentStreak(t *testing.T) {
 	}
 	if got := CurrentStreak(ds, now.AddDate(0, 0, 2)); got != 0 {
 		t.Fatal(got)
+	}
+}
+
+// The caller (the API gateway/frontend) sends its own local notion of
+// "today" as the `to` bound of the requested date range -- that's the only
+// definition of "today" the streak should ever use. If `ListHistory`
+// instead asks the server's own wall clock what day it is, the two can
+// disagree by exactly one day for roughly half of each 24h period for any
+// caller whose local timezone isn't UTC, silently truncating a real streak
+// to 0 even though every requested date was actually consecutive.
+func TestListHistoryStreakUsesCallerSuppliedToNotServerWallClock(t *testing.T) {
+	to := time.Date(2020, 1, 15, 0, 0, 0, 0, time.UTC)
+	from := to.AddDate(0, 0, -30)
+	r := &fakeRepo{dates: []time.Time{to, to.AddDate(0, 0, -1), to.AddDate(0, 0, -2)}}
+	s := New(r, checker{})
+
+	page, e := s.ListHistory(context.Background(), "u", from, to, 1, 10)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if page.Streak != 3 {
+		t.Fatalf(
+			"expected streak computed against the caller-supplied `to` (%s) to be 3 consecutive days, got %d -- "+
+				"this only comes out wrong if the streak is computed against the server's real wall clock "+
+				"instead of `to`, which would consider every seeded date to be far in the past and report 0",
+			to, page.Streak,
+		)
 	}
 }

@@ -17,7 +17,7 @@ const navItems: Array<{ to: string; label: string; end?: boolean }> = [
 type LogoutError = { message: string; requestId?: string };
 
 export function AppLayout() {
-  const { logout } = useSession();
+  const { logout, clearLocalSession } = useSession();
   const navigate = useNavigate();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<LogoutError | null>(null);
@@ -27,13 +27,17 @@ export function AppLayout() {
     setPending(true);
     setError(null);
     try {
+      // `logout()` itself treats a 4xx as an idempotent success (the server
+      // already considers the session gone), so reaching this line covers
+      // both a confirmed 2xx and that case -- either way local state is
+      // already cleared and it's safe to navigate away.
       await logout();
-      // Only navigate away once the server has confirmed the session is
-      // actually gone; on failure `logout()` leaves local state untouched,
-      // so falling through here would incorrectly land an authenticated
-      // user on the login page.
       navigate("/login", { replace: true });
     } catch (submitError) {
+      // Only a 5xx or network error reaches here: the server might still
+      // hold a live session `logout()` failed to revoke, so local state is
+      // deliberately left untouched (see `SessionProvider`) and the user
+      // stays on the page with a way to retry or fall back below.
       if (submitError instanceof ApiError) {
         setError({ message: submitError.body.message, requestId: submitError.body.request_id });
       } else {
@@ -43,16 +47,20 @@ export function AppLayout() {
     }
   }
 
+  function handleClearLocalSession() {
+    // Deliberately does not call the server: this is the explicit
+    // local-only fallback for when `logout()` keeps failing with a
+    // 5xx/network error, so the user isn't stuck on an authenticated-looking
+    // page forever just because the server is unreachable.
+    clearLocalSession();
+    navigate("/login", { replace: true });
+  }
+
   return (
     <div className={styles.appShell}>
       <a href="#main-content" className={styles.skipLink}>
         跳到主要内容
       </a>
-      {error ? (
-        <div className={styles.logoutError}>
-          <Feedback tone="error" message={error.message} requestId={error.requestId} />
-        </div>
-      ) : null}
       <aside className={styles.sidebar}>
         <strong className={styles.brand}>Fitness Check-in</strong>
         <nav aria-label="主导航" className={styles.nav}>
@@ -67,6 +75,17 @@ export function AppLayout() {
         </Button>
       </aside>
       <main id="main-content" className={styles.main}>
+        {error ? (
+          <div className={styles.logoutError}>
+            <Feedback tone="error" message={error.message} requestId={error.requestId} />
+            <p className={styles.logoutErrorHint}>
+              服务端会话可能仍然有效，本次仅退出失败；网络恢复后建议重新登录再退出一次。若暂时无法完成，可仅清除本机的登录状态。
+            </p>
+            <Button variant="secondary" onClick={handleClearLocalSession}>
+              仅清除本地会话
+            </Button>
+          </div>
+        ) : null}
         <Outlet />
       </main>
     </div>

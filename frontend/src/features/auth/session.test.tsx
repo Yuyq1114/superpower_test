@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getAccessToken } from "../../shared/api/client";
 import { RequireSession } from "./RequireSession";
 import { SessionProvider, useSession } from "./SessionProvider";
 
@@ -198,54 +199,7 @@ describe("SessionProvider", () => {
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
   });
 
-  it("logout() rejects and preserves local session state and the query cache when the server call fails, instead of faking success", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url.endsWith("/auth/refresh")) {
-          return jsonResponse({ tokens: { access_token: "tok", access_expires_in: 900, refresh_expires_in: 3600 } });
-        }
-        if (url.endsWith("/auth/logout")) {
-          return jsonResponse({ code: "INTERNAL", message: "boom", request_id: "r2" }, 500);
-        }
-        throw new Error(`unexpected request to ${url}`);
-      })
-    );
-
-    function LogoutProbe() {
-      const { status, logout } = useSession();
-      return (
-        <div>
-          <div data-testid="status">{status}</div>
-          <button
-            onClick={() => {
-              logout().catch(() => {
-                // Asserted via the rejection spy below; swallow here so the click handler doesn't throw.
-              });
-            }}
-          >
-            logout
-          </button>
-        </div>
-      );
-    }
-
-    const queryClient = newQueryClient();
-    renderSession(<LogoutProbe />, queryClient);
-    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
-
-    queryClient.setQueryData(["plans", 1, 20], { plans: [{ id: "p1" }] });
-
-    screen.getByText("logout").click();
-
-    // Give the rejected promise a tick to settle; status/cache must remain untouched throughout.
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
-    expect(queryClient.getQueryData(["plans", 1, 20])).toEqual({ plans: [{ id: "p1" }] });
-  });
-
-  it("logout() rejects with the underlying ApiError so a caller can surface the server's message", async () => {
+  it("logout() rejects with the underlying ApiError for a 5xx failure, preserving local session state and the query cache instead of faking success", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -267,10 +221,104 @@ describe("SessionProvider", () => {
       return <div data-testid="status">{status}</div>;
     }
 
-    renderSession(<CaptureProbe />);
+    const queryClient = newQueryClient();
+    renderSession(<CaptureProbe />, queryClient);
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
 
+    queryClient.setQueryData(["plans", 1, 20], { plans: [{ id: "p1" }] });
+
+    // Awaiting the rejection directly (rather than polling after an
+    // arbitrary setTimeout) is what makes this deterministic: there's no
+    // window where the assertions below could run before the promise has
+    // actually settled.
     await expect(captured[captured.length - 1]?.()).rejects.toMatchObject({ status: 500, body: { message: "boom" } });
+
+    expect(screen.getByTestId("status")).toHaveTextContent("authenticated");
+    expect(queryClient.getQueryData(["plans", 1, 20])).toEqual({ plans: [{ id: "p1" }] });
+  });
+
+  it("logout() treats a 4xx response (the server already considers the session/cookie invalid) as an idempotent success, clearing local state and cache just like a confirmed 2xx", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/auth/refresh")) {
+          return jsonResponse({ tokens: { access_token: "tok", access_expires_in: 900, refresh_expires_in: 3600 } });
+        }
+        if (url.endsWith("/auth/logout")) {
+          return jsonResponse({ code: "FORBIDDEN", message: "no session", request_id: "r3" }, 403);
+        }
+        throw new Error(`unexpected request to ${url}`);
+      })
+    );
+
+    function LogoutProbe() {
+      const { status, logout } = useSession();
+      return (
+        <div>
+          <div data-testid="status">{status}</div>
+          <button onClick={() => void logout()}>logout</button>
+        </div>
+      );
+    }
+
+    const queryClient = newQueryClient();
+    renderSession(<LogoutProbe />, queryClient);
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
+
+    queryClient.setQueryData(["plans", 1, 20], { plans: [{ id: "p1" }] });
+
+    screen.getByText("logout").click();
+
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("anonymous"));
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
+    expect(getAccessToken()).toBeNull();
+  });
+
+  it("logout() resolves to anonymous instead of deadlocking when the initial 401 triggers an automatic refresh retry that also fails (no valid access token and no valid session left)", async () => {
+    let refreshCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/auth/refresh")) {
+          refreshCalls += 1;
+          // The mount-time refresh (see beforeEach setup below) must succeed
+          // so the session starts authenticated; only the retry triggered by
+          // logout()'s own 401 should fail.
+          if (refreshCalls === 1) {
+            return jsonResponse({ tokens: { access_token: "tok", access_expires_in: 900, refresh_expires_in: 3600 } });
+          }
+          return jsonResponse({ code: "UNAUTHENTICATED", message: "no session", request_id: "r-refresh" }, 401);
+        }
+        if (url.endsWith("/auth/logout")) {
+          return jsonResponse({ code: "UNAUTHENTICATED", message: "no session", request_id: "r-logout" }, 401);
+        }
+        throw new Error(`unexpected request to ${url}`);
+      })
+    );
+
+    function LogoutProbe() {
+      const { status, logout } = useSession();
+      return (
+        <div>
+          <div data-testid="status">{status}</div>
+          <button onClick={() => void logout()}>logout</button>
+        </div>
+      );
+    }
+
+    const queryClient = newQueryClient();
+    renderSession(<LogoutProbe />, queryClient);
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
+
+    queryClient.setQueryData(["plans", 1, 20], { plans: [{ id: "p1" }] });
+
+    screen.getByText("logout").click();
+
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("anonymous"));
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
+    expect(getAccessToken()).toBeNull();
   });
 });
 
