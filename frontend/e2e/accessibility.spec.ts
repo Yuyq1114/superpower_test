@@ -37,4 +37,25 @@ test.describe("accessibility", () => {
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations).toEqual([]);
   });
+
+  test("the check-in form has no axe violations", async ({ page }) => {
+    await registerNewUser(page, { emailPrefix: "a11y-checkin" });
+    // The dashboard also has a "立即打卡" quick-action link, whose accessible
+    // name contains "打卡" as a substring, so this must be scoped to the
+    // primary navigation to avoid ambiguity.
+    await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "打卡" }).click();
+    await expect(page.getByRole("heading", { name: "打卡", exact: true })).toBeVisible();
+
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations).toEqual([]);
+  });
+
+  test("the body metrics (profile) page has no axe violations", async ({ page }) => {
+    await registerNewUser(page, { emailPrefix: "a11y-profile" });
+    await page.getByRole("link", { name: "我的" }).click();
+    await expect(page.getByRole("heading", { name: "身体数据" })).toBeVisible();
+
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations).toEqual([]);
+  });
 });

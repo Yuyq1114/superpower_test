@@ -20,6 +20,15 @@
   top: var(--space-4);
 }
 
+.logoutError {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 30;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-danger);
+  padding: var(--space-2) var(--space-4);
+}
+
 .sidebar {
   padding: var(--space-6);
   background: var(--color-surface);
@@ -49,39 +58,102 @@
   padding: var(--space-8);
 }
 
+/*
+ * Mobile: the sidebar becomes a sticky bottom bar. The 5 nav links and the
+ * logout button must all render on a single row (never stacked), each
+ * meeting the 44x44px touch-target minimum. Compact gaps/padding/font-size
+ * keep 6 targets within a 390px-wide viewport; `env(safe-area-inset-bottom)`
+ * is added to the bar's own bottom padding for home-indicator devices.
+ */
 @media (max-width: 767px) {
+  /*
+   * A flex column (instead of `display: block`) lets `.sidebar` be visually
+   * last (`order: 2`, so it sticks to the bottom of the scrollport) while
+   * staying first in the DOM (so the skip link and keyboard/tab order still
+   * reach primary navigation before page content).
+   */
   .appShell {
-    display: block;
-    padding-bottom: 72px;
+    display: flex;
+    flex-direction: column;
   }
 
+  /*
+   * `position: sticky` (anchored within the normal document flow/scrollport)
+   * instead of `position: fixed` (anchored to the CSS layout viewport/ICB):
+   * both look identical in the common case, but a `fixed` bottom bar goes
+   * stale -- rendering below the visible screen -- whenever something
+   * changes the layout viewport's height without a matching resize event
+   * (e.g. mobile Chromium's native <select> popover, or a virtual keyboard
+   * under `interactive-widget=resizes-content`). `sticky` recomputes
+   * against the actual scrollport on every layout pass, so it can't drift
+   * out of sync the same way. No reserved `.appShell` padding-bottom is
+   * needed either: sticky content still occupies its own space in flow.
+   */
   .sidebar {
-    position: fixed;
-    inset: auto 0 0;
+    order: 2;
+    position: sticky;
+    bottom: 0;
+    flex-shrink: 0;
     z-index: 10;
-    padding: var(--space-3);
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom));
     border: 0;
     border-top: 1px solid var(--color-border);
   }
 
-  .sidebar strong {
+  .brand {
     display: none;
   }
 
   .nav {
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     justify-content: space-around;
+    align-items: center;
     margin: 0;
+    gap: var(--space-1);
   }
 
-  .navLink,
-  .sidebar button {
+  .navLink {
+    flex: 0 1 auto;
     min-width: 44px;
     min-height: 44px;
+    padding: var(--space-1);
     justify-content: center;
+    font-size: 0.75rem;
+    white-space: nowrap;
   }
 
+  /* `Button` sets padding/font-size inline, which otherwise wins over any
+     external stylesheet rule regardless of specificity; `!important` is the
+     only way to compact it for the bottom bar without touching the shared
+     component used everywhere else. */
+  .sidebar button {
+    flex: 0 0 auto;
+    min-width: 44px;
+    min-height: 44px;
+    padding: var(--space-1) var(--space-2) !important;
+    font-size: 0.75rem !important;
+    white-space: nowrap;
+  }
+
+  /*
+   * `position: sticky` keeps the bottom bar correctly anchored to the
+   * viewport, but (unlike a reserved layout region) doesn't stop `.main`'s
+   * own content from flowing underneath it -- the bar simply paints on top.
+   * Reserving the bar's height (44px touch target + its own vertical
+   * padding/border + safe-area-inset) as `.main`'s padding-bottom keeps the
+   * document's actual last line of content above where the bar paints,
+   * the same way the old fixed-position layout reserved space via
+   * `.appShell`'s padding-bottom.
+   */
   .main {
-    padding: var(--space-4);
+    order: 1;
+    flex: 1 0 auto;
+    padding: var(--space-4) var(--space-4)
+      calc(var(--space-4) + 44px + var(--space-2) * 2 + 1px + env(safe-area-inset-bottom));
   }
 }

@@ -1,7 +1,7 @@
 import { apiRequest } from "../../shared/api/client";
 import type { Checkin, PageInfo } from "../../shared/api/contracts";
 import { normalizeList, normalizePage } from "../../shared/api/normalize";
-import { subtractLocalDays, formatLocalDate, todayLocalDate } from "../history/date";
+import { todayLocalDate } from "../history/date";
 
 export type CompleteCheckinInput = { workout_item_id: string; date: string; note: string };
 
@@ -37,13 +37,15 @@ export async function listHistory(
 /**
  * The `/checkins/streak` endpoint reuses the history query and requires a
  * non-empty `from`/`to` range server-side (it has no "give me just the
- * streak" mode), so this always sends an explicit, generous lookback window
- * wide enough to capture any realistic current streak.
+ * streak" mode). An arbitrary N-day lookback window would silently truncate
+ * any real streak longer than N days, so `from` is a fixed literal instead:
+ * the earliest date the backend can plausibly hold data for. Being a
+ * literal string (not a `Date` computed via subtraction) also rules out any
+ * UTC-rollover bug in the lower bound entirely.
  */
-const STREAK_LOOKBACK_DAYS = 90;
+const STREAK_RANGE_START = "1970-01-01";
 
 export function getStreak(): Promise<{ streak: number }> {
   const to = todayLocalDate();
-  const from = formatLocalDate(subtractLocalDays(new Date(), STREAK_LOOKBACK_DAYS));
-  return apiRequest(`/checkins/streak?from=${from}&to=${to}`);
+  return apiRequest(`/checkins/streak?from=${STREAK_RANGE_START}&to=${to}`);
 }

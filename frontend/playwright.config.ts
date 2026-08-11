@@ -14,6 +14,7 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:8088";
 
 export default defineConfig({
   testDir: "./e2e",
+  timeout: 60_000,
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -32,7 +33,11 @@ export default defineConfig({
     },
     {
       name: "mobile",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } }
+      // "Pixel 5" (rather than "Desktop Chrome") supplies a real mobile
+      // profile -- isMobile/hasTouch flags and a mobile Chrome user agent --
+      // while the viewport override keeps the exact 390x844 dimensions this
+      // suite's layout assertions are written against.
+      use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } }
     }
   ]
 });

@@ -40,6 +40,12 @@ export function deletePlan(id: string): Promise<void> {
   return apiRequest(`/plans/${id}`, { method: "DELETE" });
 }
 
+// This call sends no `page`/`page_size` query params, so the { page: 1,
+// page_size: 20 } fallback below isn't a guess: it mirrors the gateway's own
+// default for unspecified pagination (see `func page(c *gin.Context)` in
+// services/api-gateway/internal/http/handlers.go, which defaults
+// `page=1`/`page_size=20` via `c.DefaultQuery`), applied whenever the
+// backend response itself omits `page` under `omitempty`.
 export async function listWorkoutDays(planId: string): Promise<{ workout_days: WorkoutDay[]; page: PageInfo }> {
   const result = await apiRequest<{ workout_days?: WorkoutDay[]; page?: Partial<PageInfo> }>(
     `/plans/${planId}/days`
@@ -66,6 +72,8 @@ export function deleteWorkoutDay(planId: string, dayId: string): Promise<void> {
   return apiRequest(`/plans/${planId}/days/${dayId}`, { method: "DELETE" });
 }
 
+// Same reasoning as listWorkoutDays above: no page/page_size params are
+// sent, so { page: 1, page_size: 20 } mirrors the gateway's own default.
 export async function listWorkoutItems(dayId: string): Promise<{ items: WorkoutItem[]; page: PageInfo }> {
   const result = await apiRequest<{ items?: WorkoutItem[]; page?: Partial<PageInfo> }>(
     `/workout-days/${dayId}/items`
