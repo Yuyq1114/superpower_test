@@ -322,6 +322,24 @@ func TestRefreshRejectsMissingCookie(t *testing.T) {
 	}
 }
 
+func TestLogoutRejectsMissingOrigin(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token(t, "secret", time.Now().Add(time.Hour)))
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "refresh"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{JWTSecret: "secret", Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatalf("unexpected cookie set: %#v", w.Result().Cookies())
+	}
+}
+
 func TestLogoutRejectsDisallowedOrigin(t *testing.T) {
 	cfg := RefreshCookieConfig{
 		Name:           "fitness_refresh",
