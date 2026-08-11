@@ -22,11 +22,21 @@ import (
 
 type authStub struct {
 	authv1.AuthServiceClient
-	login func(context.Context, *authv1.LoginRequest) (*authv1.AuthResponse, error)
+	login   func(context.Context, *authv1.LoginRequest) (*authv1.AuthResponse, error)
+	refresh func(context.Context, *authv1.RefreshRequest) (*authv1.RefreshResponse, error)
+	logout  func(context.Context, *authv1.LogoutRequest) (*authv1.Empty, error)
 }
 
 func (s authStub) Login(c context.Context, r *authv1.LoginRequest, _ ...grpc.CallOption) (*authv1.AuthResponse, error) {
 	return s.login(c, r)
+}
+
+func (s authStub) Refresh(c context.Context, r *authv1.RefreshRequest, _ ...grpc.CallOption) (*authv1.RefreshResponse, error) {
+	return s.refresh(c, r)
+}
+
+func (s authStub) Logout(c context.Context, r *authv1.LogoutRequest, _ ...grpc.CallOption) (*authv1.Empty, error) {
+	return s.logout(c, r)
 }
 
 type planStub struct {
@@ -195,4 +205,69 @@ func TestStatisticsDefaultsWeekAndMapsSafeError(t *testing.T) {
 func TestResponseJSONCanDecode(t *testing.T) {
 	var v map[string]any
 	_ = json.Unmarshal([]byte(`{"ok":true}`), &v)
+}
+
+func TestLoginSetsRefreshCookieAndOmitsRefreshTokenFromBody(t *testing.T) {
+	cfg := RefreshCookieConfig{Name: "fitness_refresh"}
+	a := authStub{login: func(context.Context, *authv1.LoginRequest) (*authv1.AuthResponse, error) {
+		return &authv1.AuthResponse{Tokens: &authv1.TokenPair{
+			AccessToken: "access", RefreshToken: "refresh", RefreshExpiresIn: 3600,
+		}}, nil
+	}}
+	w := call(t, NewRouter(&Dependencies{Auth: a, Cookie: cfg}), "POST", "/api/v1/auth/login", `{"email":"a@b.com","password":"ValidPass123"}`, false)
+	if w.Code != nethttp.StatusOK || strings.Contains(w.Body.String(), "refresh_token") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	cookie := w.Result().Cookies()[0]
+	if cookie.Name != "fitness_refresh" || cookie.Value != "refresh" || !cookie.HttpOnly || cookie.SameSite != nethttp.SameSiteStrictMode {
+		t.Fatalf("cookie=%#v", cookie)
+	}
+}
+
+func TestRefreshReadsCookieRotatesAndUpdatesCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	a := authStub{refresh: func(_ context.Context, request *authv1.RefreshRequest) (*authv1.RefreshResponse, error) {
+		if request.RefreshToken != "old" {
+			t.Fatalf("refresh token=%q", request.RefreshToken)
+		}
+		return &authv1.RefreshResponse{Tokens: &authv1.TokenPair{
+			AccessToken: "access-2", RefreshToken: "new", RefreshExpiresIn: 3600,
+		}}, nil
+	}}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/refresh", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "old"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Auth: a, Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusOK || strings.Contains(w.Body.String(), "refresh_token") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Result().Cookies()[0].Value; got != "new" {
+		t.Fatalf("rotated cookie=%q", got)
+	}
+}
+
+func TestLogoutClearsCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	a := authStub{logout: func(_ context.Context, request *authv1.LogoutRequest) (*authv1.Empty, error) {
+		if request.RefreshToken != "refresh" {
+			t.Fatalf("refresh token=%q", request.RefreshToken)
+		}
+		return &authv1.Empty{}, nil
+	}}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Authorization", "Bearer "+token(t, "secret", time.Now().Add(time.Hour)))
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "refresh"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Auth: a, JWTSecret: "secret", Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusNoContent || w.Result().Cookies()[0].MaxAge >= 0 {
+		t.Fatalf("status=%d cookies=%#v", w.Code, w.Result().Cookies())
+	}
 }

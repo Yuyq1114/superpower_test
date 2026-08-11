@@ -26,6 +26,8 @@ data:
   PROFILE_DB_SCHEMA: profile_schema
   STATISTICS_DB_USER: statistics_service
   STATISTICS_DB_SCHEMA: statistics_schema
+  ALLOWED_ORIGINS: http://127.0.0.1:30080,http://localhost:30080
+  REFRESH_COOKIE_SECURE: "false"
 ---
 apiVersion: v1
 kind: ConfigMap
