@@ -177,14 +177,7 @@ func TestNginxRunsUnprivilegedWithWritableRuntimePaths(t *testing.T) {
 }
 
 func TestStartScriptRendersResolverAndExecsNginx(t *testing.T) {
-	data, err := os.ReadFile("start-nginx.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "\r\n") {
-		t.Fatal("start-nginx.sh must use LF line endings")
-	}
-	text := string(data)
+	text := readStartScript(t)
 	if !strings.HasPrefix(text, "#!/bin/sh\n") {
 		t.Error("start-nginx.sh must start with a POSIX sh shebang")
 	}
@@ -194,20 +187,106 @@ func TestStartScriptRendersResolverAndExecsNginx(t *testing.T) {
 	if !strings.Contains(text, "/etc/resolv.conf") {
 		t.Error("start-nginx.sh must read the nameserver from /etc/resolv.conf")
 	}
-	if !strings.Contains(text, `if [ -z "$resolver_ip" ]`) {
+	if !strings.Contains(text, `if [ -z "$resolver_raw" ]`) {
 		t.Error("start-nginx.sh must fail closed when no nameserver is found")
 	}
 	if !strings.Contains(text, "__DNS_RESOLVER__") {
 		t.Error("start-nginx.sh must substitute the __DNS_RESOLVER__ placeholder")
-	}
-	if !strings.Contains(text, `sed "s/__DNS_RESOLVER__/${resolver_ip}/g"`) {
-		t.Error("start-nginx.sh must use sed to render the resolver IP into the config")
 	}
 	if !strings.Contains(text, "/tmp/nginx.conf") {
 		t.Error("start-nginx.sh must render the config to a writable /tmp path")
 	}
 	if !strings.Contains(text, "exec nginx -c") {
 		t.Error("start-nginx.sh must exec nginx so it becomes PID 1 and receives signals directly")
+	}
+}
+
+func readStartScript(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("start-nginx.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "\r\n") {
+		t.Fatal("start-nginx.sh must use LF line endings")
+	}
+	return string(data)
+}
+
+func TestStartScriptValidatesStrictIPv4Octets(t *testing.T) {
+	text := readStartScript(t)
+	if !strings.Contains(text, "normalize_ipv4()") {
+		t.Fatal("start-nginx.sh must define a normalize_ipv4 function")
+	}
+	if !strings.Contains(text, "IFS=.") || !strings.Contains(text, "set -- $addr") {
+		t.Error("normalize_ipv4 must split the address on '.' into positional fields")
+	}
+	if !strings.Contains(text, `if [ "$#" -ne 4 ]`) {
+		t.Error("normalize_ipv4 must require exactly four octets")
+	}
+	if !strings.Contains(text, "''|*[!0-9]*") {
+		t.Error("normalize_ipv4 must reject any octet containing non-digit characters (rejects '/', letters, etc.)")
+	}
+	if !strings.Contains(text, `[ "${#octet}" -gt 3 ]`) {
+		t.Error("normalize_ipv4 must reject octets longer than 3 digits")
+	}
+	if !strings.Contains(text, `[ "$octet" -gt 255 ]`) {
+		t.Error("normalize_ipv4 must reject octet values above 255")
+	}
+}
+
+func TestStartScriptValidatesIPv6WithScopeStrippingAndBrackets(t *testing.T) {
+	text := readStartScript(t)
+	if !strings.Contains(text, "normalize_ipv6()") {
+		t.Fatal("start-nginx.sh must define a normalize_ipv6 function")
+	}
+	if !strings.Contains(text, "body=${addr%%%*}") {
+		t.Error("normalize_ipv6 must strip an optional %zone suffix before validating the address body")
+	}
+	if !strings.Contains(text, `if [ -z "$body" ]`) {
+		t.Error("normalize_ipv6 must reject an empty body (e.g. a zone-only value)")
+	}
+	if !strings.Contains(text, "*[!0-9A-Fa-f:.]*") {
+		t.Error("normalize_ipv6 must whitelist only hex digits, colons, and dots in the address body")
+	}
+	if !strings.Contains(text, "printf '[%s]' \"$body\"") {
+		t.Error("normalize_ipv6 must wrap the validated body in brackets for nginx's resolver directive")
+	}
+	if !strings.Contains(text, `case "$resolver_raw" in`) || !strings.Contains(text, "*:*)") {
+		t.Error("start-nginx.sh must dispatch to normalize_ipv6 only when the raw value contains a colon")
+	}
+}
+
+func TestStartScriptRejectsInvalidAddressesWithClearDiagnostics(t *testing.T) {
+	text := readStartScript(t)
+	if !strings.Contains(text, `echo "start-nginx: invalid IPv4 nameserver address: $resolver_raw" >&2`) {
+		t.Error("start-nginx.sh must print a clear diagnostic and fail closed for an invalid IPv4 nameserver")
+	}
+	if !strings.Contains(text, `echo "start-nginx: invalid IPv6 nameserver address: $resolver_raw" >&2`) {
+		t.Error("start-nginx.sh must print a clear diagnostic and fail closed for an invalid IPv6 nameserver")
+	}
+	// Both branches must reach an `exit 1` (not fall through into sed) when
+	// normalization fails, so a malformed address can never reach sed.
+	invalidIPv4 := regexp.MustCompile(`(?s)if ! resolver_ip=\$\(normalize_ipv4 "\$resolver_raw"\); then\s*\n\s*echo "start-nginx: invalid IPv4[^\n]*\n\s*exit 1\s*\n\s*fi`)
+	if !invalidIPv4.MatchString(text) {
+		t.Error("start-nginx.sh must exit 1 immediately when normalize_ipv4 fails, before reaching sed")
+	}
+	invalidIPv6 := regexp.MustCompile(`(?s)if ! resolver_ip=\$\(normalize_ipv6 "\$resolver_raw"\); then\s*\n\s*echo "start-nginx: invalid IPv6[^\n]*\n\s*exit 1\s*\n\s*fi`)
+	if !invalidIPv6.MatchString(text) {
+		t.Error("start-nginx.sh must exit 1 immediately when normalize_ipv6 fails, before reaching sed")
+	}
+}
+
+func TestStartScriptUsesSafeSedDelimiterWithNormalizedValue(t *testing.T) {
+	text := readStartScript(t)
+	if strings.Contains(text, `sed "s/__DNS_RESOLVER__/`) {
+		t.Error("start-nginx.sh must not use '/' as the sed delimiter (a bracketed IPv6 body could theoretically contain one, and it invites fragile escaping)")
+	}
+	if !strings.Contains(text, `sed "s#__DNS_RESOLVER__#${resolver_ip}#g"`) {
+		t.Error(`start-nginx.sh must render the config with sed "s#__DNS_RESOLVER__#${resolver_ip}#g" using the validated/normalized resolver_ip, not the raw value`)
+	}
+	if strings.Contains(text, "${resolver_raw}") {
+		t.Error("start-nginx.sh must never feed the unvalidated resolver_raw value into sed")
 	}
 }
 
