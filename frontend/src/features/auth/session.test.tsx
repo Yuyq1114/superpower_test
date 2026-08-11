@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +33,30 @@ describe("SessionProvider", () => {
 
     expect(screen.getByTestId("status")).toHaveTextContent("loading:no-user");
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated:no-user"));
+  });
+
+  it("calls refresh exactly once on mount even inside StrictMode", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/auth/refresh")) {
+        return jsonResponse({ tokens: { access_token: "restored", access_expires_in: 900, refresh_expires_in: 3600 } });
+      }
+      throw new Error(`unexpected request to ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <StrictMode>
+        <SessionProvider>
+          <StatusProbe />
+        </SessionProvider>
+      </StrictMode>
+    );
+
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated:no-user"));
+
+    const refreshCalls = fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/auth/refresh"));
+    expect(refreshCalls).toHaveLength(1);
   });
 
   it("falls back to anonymous when mount-time refresh fails", async () => {
