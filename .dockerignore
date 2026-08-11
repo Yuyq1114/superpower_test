@@ -7,3 +7,8 @@ deploy/k8s/dev/secret.env
 **/*_test.go
 **/*.md
 bin
+node_modules
+dist
+coverage
+test-results
+playwright-report

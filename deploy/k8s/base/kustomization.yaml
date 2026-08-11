@@ -7,5 +7,6 @@ resources:
   - postgres.yaml
   - redis.yaml
   - gateway.yaml
+  - frontend.yaml
   - services.yaml
   - monitoring.yaml

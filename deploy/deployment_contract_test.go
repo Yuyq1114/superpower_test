@@ -9,7 +9,7 @@ import (
 )
 
 func TestDeploymentFilesExistAndContainNoBOM(t *testing.T) {
-	files := []string{"docker/Dockerfile", "postgres/init.sh", "postgres/init.sql", "k8s/base/kustomization.yaml", "k8s/base/namespace.yaml", "k8s/base/configmap.yaml", "k8s/base/secret.example.yaml", "k8s/base/postgres.yaml", "k8s/base/redis.yaml", "k8s/base/gateway.yaml", "k8s/base/services.yaml", "k8s/dev/kustomization.yaml", "k8s/dev/secret.env.example", "monitoring/prometheus.yaml", "monitoring/grafana.yaml"}
+	files := []string{"docker/Dockerfile", "postgres/init.sh", "postgres/init.sql", "k8s/base/kustomization.yaml", "k8s/base/namespace.yaml", "k8s/base/configmap.yaml", "k8s/base/secret.example.yaml", "k8s/base/postgres.yaml", "k8s/base/redis.yaml", "k8s/base/gateway.yaml", "k8s/base/frontend.yaml", "k8s/base/services.yaml", "k8s/dev/kustomization.yaml", "k8s/dev/secret.env.example", "monitoring/prometheus.yaml", "monitoring/grafana.yaml"}
 	for _, name := range files {
 		data, err := os.ReadFile(name)
 		if err != nil {
@@ -130,6 +130,114 @@ func TestComposePostgresCredentialsAreSharedWithServices(t *testing.T) {
 	for _, variable := range []string{"POSTGRES_DB", "AUTH_DB_PASSWORD", "PLAN_DB_PASSWORD", "CHECKIN_DB_PASSWORD", "PROFILE_DB_PASSWORD", "STATISTICS_DB_PASSWORD"} {
 		if strings.Count(text, "${"+variable+":-") < 2 {
 			t.Errorf("docker-compose.yml must pass %s to postgres and owning service", variable)
+		}
+	}
+}
+
+func read(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestFrontendIsTheOnlyBrowserNodePort(t *testing.T) {
+	frontend := read(t, "k8s/base/frontend.yaml")
+	gateway := read(t, "k8s/base/gateway.yaml")
+	if !strings.Contains(frontend, "nodePort: 30080") {
+		t.Fatal("frontend must expose NodePort 30080")
+	}
+	if strings.Contains(gateway, "type: NodePort") || strings.Contains(gateway, "nodePort:") {
+		t.Fatal("gateway must remain internal")
+	}
+	if !strings.Contains(gateway, "type: ClusterIP") {
+		t.Fatal("gateway service must explicitly declare type: ClusterIP")
+	}
+}
+
+func TestFrontendDeploymentDeclaresOperationalSafety(t *testing.T) {
+	text := read(t, "k8s/base/frontend.yaml")
+	for _, required := range []string{
+		"startupProbe:", "readinessProbe:", "livenessProbe:", "resources:",
+		"runAsNonRoot: true", "readOnlyRootFilesystem: true",
+		"allowPrivilegeEscalation: false", "drop: [ALL]", "RuntimeDefault",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("missing %q", required)
+		}
+	}
+}
+
+func TestFrontendDeploymentContract(t *testing.T) {
+	text := read(t, "k8s/base/frontend.yaml")
+	for _, required := range []string{
+		"image: fitness/frontend:dev",
+		"imagePullPolicy: IfNotPresent",
+		"containerPort: 8080",
+		"runAsUser: 101",
+		"runAsGroup: 101",
+		"httpGet: {path: /healthz, port: http}",
+		"httpGet: {path: /api-readyz, port: http}",
+		"requests: {cpu: 25m, memory: 32Mi}",
+		"limits: {cpu: 200m, memory: 128Mi}",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("k8s/base/frontend.yaml missing %q", required)
+		}
+	}
+	for _, mount := range []string{"mountPath: /tmp", "mountPath: /var/cache/nginx", "mountPath: /var/run"} {
+		if !strings.Contains(text, mount) {
+			t.Errorf("k8s/base/frontend.yaml missing writable mount %q", mount)
+		}
+	}
+	if strings.Count(text, "emptyDir:") < 3 {
+		t.Error("k8s/base/frontend.yaml must declare an emptyDir for each writable nginx directory")
+	}
+	if !strings.Contains(text, "type: NodePort") {
+		t.Error("frontend Service must be type: NodePort")
+	}
+}
+
+func TestFrontendKustomizationIncludesFrontend(t *testing.T) {
+	text := read(t, "k8s/base/kustomization.yaml")
+	if !strings.Contains(text, "frontend.yaml") {
+		t.Fatal("base kustomization must include frontend.yaml")
+	}
+}
+
+func TestComposeAddsSameOriginFrontendAndHidesGatewayFromHost(t *testing.T) {
+	text := read(t, "docker-compose.yml")
+	if !strings.Contains(text, "127.0.0.1:${FRONTEND_PORT:-8088}:8080") {
+		t.Fatal("compose must publish the frontend on 127.0.0.1:${FRONTEND_PORT:-8088}:8080")
+	}
+	gatewayIdx := strings.Index(text, "api-gateway:")
+	if gatewayIdx < 0 {
+		t.Fatal("compose must define api-gateway service")
+	}
+	frontendIdx := strings.Index(text, "\n  frontend:")
+	if frontendIdx < 0 {
+		t.Fatal("compose must define a frontend service")
+	}
+	gatewayBlockEnd := len(text)
+	if frontendIdx > gatewayIdx {
+		gatewayBlockEnd = frontendIdx
+	}
+	gatewayBlock := text[gatewayIdx:gatewayBlockEnd]
+	if strings.Contains(gatewayBlock, "ports:") {
+		t.Error("api-gateway must no longer publish a host port once the frontend is the same-origin entrypoint")
+	}
+	if !strings.Contains(gatewayBlock, `expose: ["8080"]`) {
+		t.Error("api-gateway must still expose 8080 on the compose network")
+	}
+}
+
+func TestDockerignoreExcludesBuildArtifactsFromFrontendContext(t *testing.T) {
+	text := read(t, "../.dockerignore")
+	for _, required := range []string{"node_modules", "dist", "test-results", "playwright-report", "coverage"} {
+		if !strings.Contains(text, required) {
+			t.Errorf(".dockerignore must exclude %q from build contexts", required)
 		}
 	}
 }

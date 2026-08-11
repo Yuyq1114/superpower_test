@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: frontend}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: frontend, app.kubernetes.io/part-of: fitness-checkin}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: frontend
+          image: fitness/frontend:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 30}
+          readinessProbe: {httpGet: {path: /api-readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
+          resources: {requests: {cpu: 25m, memory: 32Mi}, limits: {cpu: 200m, memory: 128Mi}}
+          securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: cache, mountPath: /var/cache/nginx}
+            - {name: run, mountPath: /var/run}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 32Mi}}
+        - {name: cache, emptyDir: {sizeLimit: 32Mi}}
+        - {name: run, emptyDir: {sizeLimit: 8Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  type: NodePort
+  selector: {app.kubernetes.io/name: frontend}
+  ports: [{name: http, port: 8080, targetPort: http, nodePort: 30080}]
