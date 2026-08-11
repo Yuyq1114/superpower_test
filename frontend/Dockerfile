@@ -7,8 +7,9 @@ COPY . .
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:stable-alpine
-COPY nginx/nginx.conf /etc/nginx/nginx.conf
+COPY nginx/nginx.conf /etc/nginx/nginx.conf.template
+COPY --chmod=755 nginx/start-nginx.sh /usr/local/bin/start-nginx.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080
 USER 101:101
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/usr/local/bin/start-nginx.sh"]

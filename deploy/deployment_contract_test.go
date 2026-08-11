@@ -234,11 +234,37 @@ func TestComposeAddsSameOriginFrontendAndHidesGatewayFromHost(t *testing.T) {
 }
 
 func TestDockerignoreExcludesBuildArtifactsFromFrontendContext(t *testing.T) {
-	text := read(t, "../.dockerignore")
+	// The frontend image is built with `docker build ... frontend` (and Compose
+	// build.context: ../frontend), so Docker only honors the .dockerignore that
+	// lives at the root of that build context, not the repository root one.
+	frontendIgnore := read(t, "../frontend/.dockerignore")
 	for _, required := range []string{"node_modules", "dist", "test-results", "playwright-report", "coverage"} {
-		if !strings.Contains(text, required) {
-			t.Errorf(".dockerignore must exclude %q from build contexts", required)
+		if !strings.Contains(frontendIgnore, required) {
+			t.Errorf("frontend/.dockerignore must exclude %q from the frontend build context", required)
 		}
+	}
+
+	rootIgnore := read(t, "../.dockerignore")
+	for _, required := range []string{"node_modules", "dist", "test-results", "playwright-report", "coverage"} {
+		if !strings.Contains(rootIgnore, required) {
+			t.Errorf("root .dockerignore must also exclude %q for consistency", required)
+		}
+	}
+}
+
+func TestE2EAndOperatorHintsPointToTheFrontendEntrypoint(t *testing.T) {
+	// Since Task 8, api-gateway no longer publishes a host port; every
+	// operator-facing BASE_URL/test-e2e hint must point at the same-origin
+	// frontend entrypoint (127.0.0.1:8088) instead of the retired gateway
+	// host port (127.0.0.1:8080), or E2E runs will fail to even connect.
+	for _, name := range []string{"../tests/e2e/fitness_flow_test.go", "../Makefile", "../README.md"} {
+		text := read(t, name)
+		if strings.Contains(text, "127.0.0.1:8080") {
+			t.Errorf("%s still references the retired gateway host port 127.0.0.1:8080; it must point at the frontend entrypoint 127.0.0.1:8088", name)
+		}
+	}
+	if !strings.Contains(read(t, "../tests/e2e/fitness_flow_test.go"), "127.0.0.1:8088") {
+		t.Error("tests/e2e/fitness_flow_test.go must hint at BASE_URL=http://127.0.0.1:8088")
 	}
 }
 

@@ -79,7 +79,7 @@ type summaryResponse struct {
 func TestFitnessFlow(t *testing.T) {
 	base := strings.TrimRight(os.Getenv("BASE_URL"), "/")
 	if base == "" {
-		t.Fatal("BASE_URL is required for E2E tests; start the complete stack and run `BASE_URL=http://127.0.0.1:8080 make test-e2e`")
+		t.Fatal("BASE_URL is required for E2E tests; since Task 8, api-gateway no longer publishes a host port, so start the complete stack and run `BASE_URL=http://127.0.0.1:8088 make test-e2e` against the same-origin frontend entrypoint")
 	}
 	c, err := newClient(base)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestFitnessFlow(t *testing.T) {
 func TestRefreshCookieRotationAndLogout(t *testing.T) {
 	base := strings.TrimRight(os.Getenv("BASE_URL"), "/")
 	if base == "" {
-		t.Fatal("BASE_URL is required for E2E tests; start the complete stack and run `BASE_URL=http://127.0.0.1:8080 make test-e2e`")
+		t.Fatal("BASE_URL is required for E2E tests; since Task 8, api-gateway no longer publishes a host port, so start the complete stack and run `BASE_URL=http://127.0.0.1:8088 make test-e2e` against the same-origin frontend entrypoint")
 	}
 	c, err := newClient(base)
 	if err != nil {

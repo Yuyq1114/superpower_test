@@ -26,7 +26,7 @@ Compose 默认只使用本地开发凭据，默认值不得用于生产。可以
 
 ```bash
 make up
-BASE_URL=http://127.0.0.1:8080 make test-e2e
+BASE_URL=http://127.0.0.1:8088 make test-e2e
 make down
 ```
 
@@ -36,7 +36,7 @@ make down
 docker compose -f deploy/docker-compose.yml up -d postgres redis
 ```
 
-服务也可以单独用 Docker Compose 的 service 名称启动；服务之间的地址由 Compose 环境变量配置。Windows PowerShell 等价命令示例：`$env:BASE_URL='http://127.0.0.1:8080'; go test -tags=e2e ./tests/e2e -count=1`。如果端口被占用，设置 `POSTGRES_PORT`、`REDIS_PORT` 或 `GATEWAY_PORT`。PostgreSQL 空数据卷初始化时只自动执行 `init.sh`；SQL 挂载在 `/opt/fitness-init/001-init.sql`，由脚本显式执行一次。仓库通过 `.gitattributes` 强制 shell 脚本使用 LF，避免 Windows checkout 产生 CRLF。
+服务也可以单独用 Docker Compose 的 service 名称启动；服务之间的地址由 Compose 环境变量配置。Windows PowerShell 等价命令示例：`$env:BASE_URL='http://127.0.0.1:8088'; go test -tags=e2e ./tests/e2e -count=1`。如果端口被占用，设置 `POSTGRES_PORT`、`REDIS_PORT` 或 `FRONTEND_PORT`。自 Task 8 起，`api-gateway` 不再发布 host 端口（只在 Compose 网络内 `expose`），必须通过前端同源入口（`frontend`，默认 `FRONTEND_PORT=8088`）访问 `/api/v1/*`、`/healthz`。PostgreSQL 空数据卷初始化时只自动执行 `init.sh`；SQL 挂载在 `/opt/fitness-init/001-init.sql`，由脚本显式执行一次。仓库通过 `.gitattributes` 强制 shell 脚本使用 LF，避免 Windows checkout 产生 CRLF。
 
 ## Proto
 
@@ -56,7 +56,7 @@ TEST_DATABASE_DSN=postgres://statistics_service:statistics-local-only@127.0.0.1:
 TEST_DATABASE_ADMIN_DSN=postgres://fitness:postgres-local-only@127.0.0.1:5432/fitness?sslmode=disable \
 make test-integration     # go test -tags=integration ./...
 go test ./...             # 常规测试，不编译或运行带 e2e tag 的测试
-BASE_URL=http://127.0.0.1:8080 make test-e2e
+BASE_URL=http://127.0.0.1:8088 make test-e2e
 ```
 
 带 `e2e` tag 的完整栈测试会执行注册、登录、建计划、训练日、训练项目、打卡、相同幂等键重复打卡、身体指标和统计查询。统计查询最多轮询 20 秒，且验证重复打卡最终只计一次；它不直接重放 Redis 消息。`make test-e2e` 先检查 `BASE_URL`，随后执行 `go test -tags=e2e ./tests/e2e -count=1`；直接运行 tagged 测试时，`BASE_URL` 缺失、服务不可达或业务断言失败也都会失败。
@@ -75,7 +75,7 @@ make k8s-up
 make k8s-down
 ```
 
-`k8s-up` 在 `secret.env` 缺失时拒绝执行，不生成 secret，也不会提交它。执行前必须确认 `kubectl config current-context`、namespace 和集群；`kubectl apply/delete -k` 作用于当前 context，误用生产 context 可能造成真实破坏。Gateway 是 NodePort `30080`，Prometheus 服务端口为 `9090`，Grafana 为 `3000`。
+`k8s-up` 在 `secret.env` 缺失时拒绝执行，不生成 secret，也不会提交它。执行前必须确认 `kubectl config current-context`、namespace 和集群；`kubectl apply/delete -k` 作用于当前 context，误用生产 context 可能造成真实破坏。自 Task 8 起，`frontend` 是唯一的浏览器 NodePort `30080`（同源提供静态资源与 `/api/v1/*` 反向代理），`api-gateway` 改为集群内部 `ClusterIP`，不再直接暴露；Prometheus 服务端口为 `9090`，Grafana 为 `3000`。
 
 本仓库当前验证环境只有 `default` context，目标 API `https://117.50.85.130:6443` 不可达，且没有 Docker Desktop 本地 Kubernetes context，因此不能声称 Kubernetes apply 成功。K8s 镜像也需要先按部署环境构建/发布。
 
