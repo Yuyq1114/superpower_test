@@ -123,6 +123,35 @@ describe("HistoryPage", () => {
     expect(await screen.findByText("深蹲三组")).toBeInTheDocument();
   });
 
+  it("recovers from a streak error via its own retry button without refetching history", async () => {
+    const gw = createFakeGateway([makeCheckin({ id: "c1", date: "2026-08-10", note: "深蹲三组" })]);
+    let streakCalls = 0;
+    server.use(
+      http.get("/api/v1/checkins", gw.historyResolver),
+      http.get("/api/v1/checkins/streak", () => {
+        streakCalls += 1;
+        if (streakCalls === 1) {
+          return HttpResponse.json(
+            { code: "INTERNAL", message: "加载连续天数失败", request_id: "req-streak-500" },
+            { status: 500 }
+          );
+        }
+        return HttpResponse.json({ streak: 3 });
+      })
+    );
+    renderHistory();
+
+    expect(await screen.findByText(/加载连续天数失败/)).toBeInTheDocument();
+    await screen.findByText("深蹲三组");
+    const historyCallsBeforeRetry = gw.seenHistoryUrls.length;
+
+    await user.click(screen.getByRole("button", { name: "重试连续天数" }));
+
+    expect(await screen.findByText("连续 3 天")).toBeInTheDocument();
+    expect(streakCalls).toBe(2);
+    expect(gw.seenHistoryUrls.length).toBe(historyCallsBeforeRetry);
+  });
+
   it("paginates and disables boundary buttons, resetting to page 1 when the date range changes", async () => {
     const seedCheckins = Array.from({ length: 15 }, (_, i) =>
       makeCheckin({ id: `c${i + 1}`, date: "2026-08-10", note: `记录${String(i + 1).padStart(2, "0")}` })

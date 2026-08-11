@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "../../shared/api/client";
 import type { Checkin } from "../../shared/api/contracts";
@@ -6,7 +6,7 @@ import { Button } from "../../shared/ui/Button";
 import { Feedback } from "../../shared/ui/Feedback";
 import { Field } from "../../shared/ui/Field";
 import { todayLocalDate } from "../history/date";
-import { usePlansQuery, useWorkoutDaysQuery, useWorkoutItemsQuery } from "../plans/queries";
+import { useActivePlansQuery, useWorkoutDaysQuery, useWorkoutItemsQuery } from "../plans/queries";
 import { completeCheckin } from "./api";
 
 const INVALIDATE_PREFIXES = [["history"], ["streak"], ["dashboard"], ["summary"], ["statistics"]];
@@ -20,11 +20,8 @@ function buildIdentity(values: { itemId: string; date: string; note: string }): 
 
 export function CheckinPage() {
   const queryClient = useQueryClient();
-  const plansQuery = usePlansQuery(1, 100);
-  const activePlans = useMemo(
-    () => (plansQuery.data?.plans ?? []).filter((plan) => plan.status === "active"),
-    [plansQuery.data]
-  );
+  const activePlansQuery = useActivePlansQuery();
+  const activePlans = activePlansQuery.data ?? [];
 
   const [planId, setPlanId] = useState("");
   const [dayId, setDayId] = useState("");
@@ -102,13 +99,22 @@ export function CheckinPage() {
   }
 
   const plansErrorMessage =
-    plansQuery.error instanceof ApiError ? plansQuery.error.body.message : "加载训练计划失败";
+    activePlansQuery.error instanceof ApiError ? activePlansQuery.error.body.message : "加载训练计划失败";
+  const daysErrorMessage =
+    daysQuery.error instanceof ApiError ? daysQuery.error.body.message : "加载训练日失败";
+  const itemsErrorMessage =
+    itemsQuery.error instanceof ApiError ? itemsQuery.error.body.message : "加载训练项目失败";
 
   return (
     <section>
       <h1>打卡</h1>
-      {plansQuery.isLoading ? <p role="status">加载中…</p> : null}
-      {plansQuery.isError ? <Feedback tone="error" message={plansErrorMessage} /> : null}
+      {activePlansQuery.isLoading ? <p role="status">加载中…</p> : null}
+      {activePlansQuery.isError ? (
+        <div>
+          <Feedback tone="error" message={plansErrorMessage} />
+          <Button onClick={() => void activePlansQuery.refetch()}>重试加载计划</Button>
+        </div>
+      ) : null}
 
       <form noValidate onSubmit={handleSubmit}>
         <Field label="训练计划" htmlFor="checkin-plan">
@@ -137,6 +143,15 @@ export function CheckinPage() {
             ))}
           </select>
         </Field>
+        {daysQuery.isLoading ? <p role="status">训练日加载中…</p> : null}
+        {daysQuery.isError ? (
+          <div>
+            <Feedback tone="error" message={daysErrorMessage} />
+            <Button type="button" onClick={() => void daysQuery.refetch()}>
+              重试加载训练日
+            </Button>
+          </div>
+        ) : null}
 
         <Field label="训练项目" htmlFor="checkin-item">
           <select id="checkin-item" value={itemId} onChange={(event) => setItemId(event.target.value)} disabled={!dayId}>
@@ -148,6 +163,15 @@ export function CheckinPage() {
             ))}
           </select>
         </Field>
+        {itemsQuery.isLoading ? <p role="status">训练项目加载中…</p> : null}
+        {itemsQuery.isError ? (
+          <div>
+            <Feedback tone="error" message={itemsErrorMessage} />
+            <Button type="button" onClick={() => void itemsQuery.refetch()}>
+              重试加载训练项目
+            </Button>
+          </div>
+        ) : null}
 
         <Field label="打卡日期" htmlFor="checkin-date">
           <input

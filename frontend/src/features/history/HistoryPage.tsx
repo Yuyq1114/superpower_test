@@ -62,7 +62,12 @@ export function HistoryPage() {
       </div>
 
       {streakQuery.isLoading ? <p role="status">连续天数加载中…</p> : null}
-      {streakQuery.isError ? <Feedback tone="error" message={streakErrorMessage} /> : null}
+      {streakQuery.isError ? (
+        <div>
+          <Feedback tone="error" message={streakErrorMessage} />
+          <Button onClick={() => void streakQuery.refetch()}>重试连续天数</Button>
+        </div>
+      ) : null}
       {streakQuery.data ? <p>连续 {streakQuery.data.streak} 天</p> : null}
 
       {historyQuery.isLoading ? <p role="status">加载中…</p> : null}
