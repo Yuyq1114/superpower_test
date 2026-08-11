@@ -1,18 +1,37 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SessionProvider } from "../features/auth/SessionProvider";
 import { AppLayout } from "./AppLayout";
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function renderLayoutAt(path: string) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      jsonResponse({ tokens: { access_token: "tok", access_expires_in: 900, refresh_expires_in: 3600 } })
+    )
+  );
+
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<h1>今日训练</h1>} />
-          <Route path="/plans" element={<h1>训练计划</h1>} />
-        </Route>
-      </Routes>
+      <SessionProvider>
+        <Routes>
+          <Route path="/login" element={<h1>登录</h1>} />
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<h1>今日训练</h1>} />
+            <Route path="/plans" element={<h1>训练计划</h1>} />
+          </Route>
+        </Routes>
+      </SessionProvider>
     </MemoryRouter>
   );
 }
@@ -53,5 +72,17 @@ describe("AppLayout", () => {
     ["首页", "计划", "打卡", "历史", "我的"].forEach((label) => {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     });
+  });
+
+  it("logs out and navigates to /login when the logout button is clicked", async () => {
+    const user = userEvent.setup();
+    renderLayoutAt("/");
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "退出登录" })).toBeInTheDocument()
+    );
+    await user.click(screen.getByRole("button", { name: "退出登录" }));
+
+    expect(await screen.findByRole("heading", { name: "登录" })).toBeInTheDocument();
   });
 });

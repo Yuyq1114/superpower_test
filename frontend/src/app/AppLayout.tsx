@@ -1,4 +1,6 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useSession } from "../features/auth/SessionProvider";
+import { Button } from "../shared/ui/Button";
 import styles from "./AppLayout.module.css";
 
 const navItems: Array<{ to: string; label: string; end?: boolean }> = [
@@ -10,6 +12,14 @@ const navItems: Array<{ to: string; label: string; end?: boolean }> = [
 ];
 
 export function AppLayout() {
+  const { logout } = useSession();
+  const navigate = useNavigate();
+
+  async function handleLogout() {
+    await logout();
+    navigate("/login", { replace: true });
+  }
+
   return (
     <div className={styles.appShell}>
       <a href="#main-content" className={styles.skipLink}>
@@ -24,6 +34,9 @@ export function AppLayout() {
             </NavLink>
           ))}
         </nav>
+        <Button variant="secondary" onClick={() => void handleLogout()}>
+          退出登录
+        </Button>
       </aside>
       <main id="main-content" className={styles.main}>
         <Outlet />

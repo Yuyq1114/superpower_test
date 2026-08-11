@@ -194,7 +194,11 @@ func TestRefreshCookieRotationAndLogout(t *testing.T) {
 	if c.token == "" {
 		t.Fatal("empty login access token")
 	}
-	loginCookies := c.http.Jar.Cookies(mustURL(t, base))
+	// The refresh cookie is scoped to Path=/api/v1/auth (never sent on other
+	// routes), so it must be queried under that path: Go's cookiejar only
+	// returns a cookie for a URL whose path the cookie's Path is a prefix
+	// of, and the bare base URL's path ("/") doesn't qualify.
+	loginCookies := c.http.Jar.Cookies(mustURL(t, base+"/api/v1/auth"))
 	if !hasCookie(loginCookies, "fitness_refresh") {
 		t.Fatal("login response did not set fitness_refresh cookie")
 	}
@@ -209,7 +213,7 @@ func TestRefreshCookieRotationAndLogout(t *testing.T) {
 	}
 	c.token = refreshed.Tokens.AccessToken
 
-	rotatedCookies := c.http.Jar.Cookies(mustURL(t, base))
+	rotatedCookies := c.http.Jar.Cookies(mustURL(t, base+"/api/v1/auth"))
 	if !hasCookie(rotatedCookies, "fitness_refresh") {
 		t.Fatal("refresh response did not keep a fitness_refresh cookie")
 	}
@@ -217,7 +221,7 @@ func TestRefreshCookieRotationAndLogout(t *testing.T) {
 	if e := c.do(ctx, "POST", "/api/v1/auth/logout", nil, "", 204, nil); e != nil {
 		t.Fatalf("logout failed: %v", e)
 	}
-	postLogoutCookies := c.http.Jar.Cookies(mustURL(t, base))
+	postLogoutCookies := c.http.Jar.Cookies(mustURL(t, base+"/api/v1/auth"))
 	if hasCookie(postLogoutCookies, "fitness_refresh") {
 		t.Fatal("logout did not clear the fitness_refresh cookie")
 	}

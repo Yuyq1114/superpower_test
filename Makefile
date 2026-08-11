@@ -1,4 +1,4 @@
-﻿.PHONY: proto test test-integration test-e2e up down k8s-up k8s-down
+﻿.PHONY: proto test test-integration test-e2e up down k8s-up k8s-down frontend-test frontend-build frontend-e2e
 
 proto:
 	powershell -ExecutionPolicy Bypass -File scripts/generate-proto.ps1
@@ -26,3 +26,13 @@ k8s-up:
 
 k8s-down:
 	kubectl delete -k deploy/k8s/dev
+
+frontend-test:
+	cd frontend && npm run test:run && npm run typecheck && npm run lint
+
+frontend-build:
+	cd frontend && npm run build
+
+frontend-e2e:
+	@if [ -z "$(PLAYWRIGHT_BASE_URL)" ]; then echo "PLAYWRIGHT_BASE_URL is required, e.g. PLAYWRIGHT_BASE_URL=http://127.0.0.1:8088 make frontend-e2e (or http://127.0.0.1:30080 for the Kubernetes deployment)"; exit 2; fi
+	cd frontend && PLAYWRIGHT_BASE_URL=$(PLAYWRIGHT_BASE_URL) npx playwright test

@@ -306,6 +306,17 @@ describe("BodyMetricsPage", () => {
     expect(screen.getByText("最新体脂率：暂无记录")).toBeInTheDocument();
   });
 
+  it("shows an empty state when the gateway omits `metrics` entirely for a new user", async () => {
+    // Regression: the gateway marshals with Go's `omitempty`, so a
+    // brand-new user gets back `{}` (no `metrics` key at all), not
+    // `{metrics: []}`.
+    server.use(http.get("/api/v1/body-metrics", () => HttpResponse.json({})));
+    renderBodyMetrics();
+
+    expect(await screen.findByText("最新体重：暂无记录")).toBeInTheDocument();
+    expect(screen.getByText("最新体脂率：暂无记录")).toBeInTheDocument();
+  });
+
   it("shows an error with a retry button for the metrics list, and retrying succeeds", async () => {
     let calls = 0;
     server.use(

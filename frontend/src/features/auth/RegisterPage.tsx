@@ -52,7 +52,7 @@ export function RegisterPage() {
   }
 
   return (
-    <div className={styles.authPage}>
+    <main className={styles.authPage}>
       <form className={styles.form} noValidate onSubmit={handleSubmit(onSubmit)}>
         <h1>注册</h1>
         <Field label="邮箱" htmlFor="email" error={errors.email?.message}>
@@ -85,6 +85,6 @@ export function RegisterPage() {
           已有账号？<Link to="/login">立即登录</Link>
         </p>
       </form>
-    </div>
+    </main>
   );
 }

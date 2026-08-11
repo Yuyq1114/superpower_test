@@ -4,6 +4,24 @@ set -eu
 TEMPLATE="${NGINX_CONF_TEMPLATE:-/etc/nginx/nginx.conf.template}"
 RENDERED="${NGINX_CONF_RENDERED:-/tmp/nginx.conf}"
 
+# In Compose, the embedded DNS resolves the short service name directly, so
+# no namespace is needed. In Kubernetes, POD_NAMESPACE (populated via the
+# Downward API) lets us build the Service's real DNS name without hardcoding
+# a namespace in the YAML. Only safe DNS-label characters are allowed before
+# this reaches sed.
+case "${POD_NAMESPACE:-}" in
+  '')
+    api_gateway_upstream="api-gateway:8080"
+    ;;
+  *[!A-Za-z0-9-]*)
+    echo "start-nginx: invalid POD_NAMESPACE: ${POD_NAMESPACE}" >&2
+    exit 1
+    ;;
+  *)
+    api_gateway_upstream="api-gateway.${POD_NAMESPACE}.svc.cluster.local:8080"
+    ;;
+esac
+
 resolver_raw=$(awk '/^nameserver[[:space:]]/ { print $2; exit }' /etc/resolv.conf)
 if [ -z "$resolver_raw" ]; then
   echo "start-nginx: no nameserver found in /etc/resolv.conf" >&2
@@ -71,6 +89,6 @@ esac
 # appear in a validated resolver_ip (plain IPv4 octets, or a bracketed IPv6
 # address restricted to hex digits, colons, and dots), so the substitution
 # cannot be broken out of or reinterpreted as extra sed commands.
-sed "s#__DNS_RESOLVER__#${resolver_ip}#g" "$TEMPLATE" > "$RENDERED"
+sed -e "s#__DNS_RESOLVER__#${resolver_ip}#g" -e "s#__API_GATEWAY_UPSTREAM__#${api_gateway_upstream}#g" "$TEMPLATE" > "$RENDERED"
 
 exec nginx -c "$RENDERED" -g 'daemon off;'

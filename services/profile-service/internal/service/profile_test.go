@@ -76,6 +76,29 @@ func TestIdempotencyConflictAndStableSort(t *testing.T) {
 		t.Fatal("unstable order")
 	}
 }
+// Regression: a freshly-recorded metric must always show up in the
+// zero-filter ("give me everything") listing, even if recorded_at is a few
+// seconds ahead of this process's own clock. Defaulting the upper bound to
+// time.Now() (instead of leaving it unbounded, symmetric with how a zero
+// lower bound defaults to the Unix epoch rather than "now") silently
+// excluded records whenever the recorded_at timestamp -- set by the caller,
+// e.g. a browser -- raced ahead of ListMetrics's own clock read due to
+// ordinary clock skew between processes/containers.
+func TestListMetricsDefaultRangeIncludesClockSkewedRecordedAt(t *testing.T) {
+	r := &fakeRepo{}
+	s := New(r)
+	future := time.Now().UTC().Add(5 * time.Second)
+	if _, e := s.RecordMetric(context.Background(), "u", MetricInput{"weight", 70.5, "kg", future, "k"}); e != nil {
+		t.Fatal(e)
+	}
+	got, e := s.ListMetrics(context.Background(), "u", "", time.Time{}, time.Time{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the just-recorded metric to be included in the default range, got %d results", len(got))
+	}
+}
 func TestListRejectsInvalidTypeAndRange(t *testing.T) {
 	s := New(&fakeRepo{})
 	if _, e := s.ListMetrics(context.Background(), "u", "height", time.Time{}, time.Time{}); apperror.CodeOf(e) != apperror.CodeInvalidArgument {

@@ -62,8 +62,8 @@ func TestResolverUsesRuntimePlaceholderNotHardcodedDNS(t *testing.T) {
 
 func TestApiGatewayUpstreamIsAVariableForLazyResolution(t *testing.T) {
 	text := readConf(t)
-	if !strings.Contains(text, "set $api_gateway http://api-gateway:8080;") {
-		t.Fatal("nginx.conf must declare $api_gateway as a variable so nginx resolves it lazily per-request instead of at startup")
+	if !strings.Contains(text, "set $api_gateway http://__API_GATEWAY_UPSTREAM__;") {
+		t.Fatal("nginx.conf must declare $api_gateway as a variable, populated from the __API_GATEWAY_UPSTREAM__ placeholder substituted at container start, so nginx resolves it lazily per-request instead of at startup")
 	}
 }
 
@@ -282,11 +282,27 @@ func TestStartScriptUsesSafeSedDelimiterWithNormalizedValue(t *testing.T) {
 	if strings.Contains(text, `sed "s/__DNS_RESOLVER__/`) {
 		t.Error("start-nginx.sh must not use '/' as the sed delimiter (a bracketed IPv6 body could theoretically contain one, and it invites fragile escaping)")
 	}
-	if !strings.Contains(text, `sed "s#__DNS_RESOLVER__#${resolver_ip}#g"`) {
-		t.Error(`start-nginx.sh must render the config with sed "s#__DNS_RESOLVER__#${resolver_ip}#g" using the validated/normalized resolver_ip, not the raw value`)
+	if !strings.Contains(text, `sed -e "s#__DNS_RESOLVER__#${resolver_ip}#g" -e "s#__API_GATEWAY_UPSTREAM__#${api_gateway_upstream}#g"`) {
+		t.Error(`start-nginx.sh must render the config with sed using the validated/normalized resolver_ip and api_gateway_upstream, not raw/unvalidated values`)
 	}
 	if strings.Contains(text, "${resolver_raw}") {
 		t.Error("start-nginx.sh must never feed the unvalidated resolver_raw value into sed")
+	}
+}
+
+func TestStartScriptBuildsApiGatewayUpstreamFromNamespaceSafely(t *testing.T) {
+	text := readStartScript(t)
+	if !strings.Contains(text, "POD_NAMESPACE") {
+		t.Fatal("start-nginx.sh must read POD_NAMESPACE (populated via the Kubernetes Downward API) to build a namespace-qualified upstream")
+	}
+	if !strings.Contains(text, `api_gateway_upstream="api-gateway:8080"`) {
+		t.Error("start-nginx.sh must default to the short Compose service name when POD_NAMESPACE is unset")
+	}
+	if !strings.Contains(text, `api_gateway_upstream="api-gateway.${POD_NAMESPACE}.svc.cluster.local:8080"`) {
+		t.Error("start-nginx.sh must build the namespace-qualified Kubernetes Service DNS name when POD_NAMESPACE is set")
+	}
+	if !strings.Contains(text, "*[!A-Za-z0-9-]*") {
+		t.Error("start-nginx.sh must reject a POD_NAMESPACE containing characters outside a safe DNS-label charset before it reaches sed")
 	}
 }
 

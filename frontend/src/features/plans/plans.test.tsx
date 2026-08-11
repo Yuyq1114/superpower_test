@@ -274,6 +274,33 @@ describe("PlansPage / PlanDetailPage", () => {
     await screen.findByText("计划01");
   });
 
+  it("renders the empty state instead of crashing when the gateway omits `plans`/`total` for a new user", async () => {
+    // The gateway marshals responses with Go's `omitempty`, so a brand-new
+    // user with zero plans gets back `{"page":{"page":1,"page_size":20}}`
+    // with no `plans` key and no `total` at all, not `{plans: [], page:
+    // {..., total: 0}}`. Regression for a real production crash (unguarded
+    // `plansQuery.data.plans.length` reading `.length` off `undefined`) that
+    // only ever showed up against the real backend, never against fully
+    // populated mocks.
+    server.use(http.get("/api/v1/plans", () => HttpResponse.json({ page: { page: 1, page_size: 20 } })));
+    renderPlans();
+
+    await expect(screen.findByText("暂无训练计划")).resolves.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "训练计划" })).toBeInTheDocument();
+  });
+
+  it("renders the empty state instead of crashing when the gateway omits `workout_days` for a plan with none yet", async () => {
+    const seedPlan = makePlan({ id: "plan-empty-days" });
+    const gw = createFakeGateway([seedPlan]);
+    server.use(...gw.handlers);
+    server.use(
+      http.get("/api/v1/plans/:planId/days", () => HttpResponse.json({ page: { page: 1, page_size: 20 } }))
+    );
+    renderPlans(`/plans/${seedPlan.id}`);
+
+    await expect(screen.findByText("暂无训练日")).resolves.toBeInTheDocument();
+  });
+
   it("keeps the entered plan name after a 503 error", async () => {
     const gw = createFakeGateway();
     server.use(...gw.handlers);

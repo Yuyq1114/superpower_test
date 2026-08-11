@@ -5,7 +5,9 @@
   --color-text: #142018;
   --color-muted: #657269;
   --color-accent: #35e26f;
-  --color-accent-strong: #0b9f48;
+  /* White-on-accent text (primary buttons) needs >=4.5:1 contrast for WCAG
+     2 AA; #0b9f48 only reaches ~3.46:1, so this is darkened to ~4.75:1. */
+  --color-accent-strong: #098536;
   --color-danger: #d92d20;
   --color-border: #dfe7df;
   --radius-card: 16px;

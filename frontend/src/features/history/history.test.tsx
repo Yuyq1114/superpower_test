@@ -51,7 +51,14 @@ function createFakeGateway(seedCheckins: Checkin[] = [], streak = 3) {
     });
   }
 
-  const streakHandler = http.get("/api/v1/checkins/streak", () => HttpResponse.json({ streak }));
+  const streakHandler = http.get("/api/v1/checkins/streak", ({ request }) => {
+    const url = new URL(request.url);
+    // Regression: the streak request used to omit `from`/`to` entirely and
+    // always 400'd against the real backend, which requires both.
+    expect(url.searchParams.get("from")).toBeTruthy();
+    expect(url.searchParams.get("to")).toBeTruthy();
+    return HttpResponse.json({ streak });
+  });
   const handlers = [http.get("/api/v1/checkins", historyResolver), streakHandler];
 
   return { handlers, historyResolver, streakHandler, seenHistoryUrls, checkins: () => checkins };

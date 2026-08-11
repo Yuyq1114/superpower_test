@@ -39,7 +39,15 @@ function itemsHandler(items: WorkoutItem[]) {
 }
 
 function streakHandler(streak: number) {
-  return http.get("/api/v1/checkins/streak", () => HttpResponse.json({ streak }));
+  return http.get("/api/v1/checkins/streak", ({ request }) => {
+    const url = new URL(request.url);
+    // The checkin service's streak route reuses `ListHistory` and 400s
+    // without a `from`/`to` range (regression: the request used to omit
+    // both and always failed against the real backend).
+    expect(url.searchParams.get("from")).toBeTruthy();
+    expect(url.searchParams.get("to")).toBeTruthy();
+    return HttpResponse.json({ streak });
+  });
 }
 
 function historyHandler(checkins: Checkin[], total?: number) {
@@ -104,6 +112,10 @@ describe("DashboardPage", () => {
       http.get("/api/v1/statistics/summary", ({ request }) => {
         const url = new URL(request.url);
         expect(url.searchParams.get("period")).toBe("week");
+        // The statistics service rejects an empty `start` with "start is
+        // required" (regression: the request used to omit it entirely and
+        // always 400'd against the real backend).
+        expect(url.searchParams.get("start")).toBeTruthy();
         return HttpResponse.json({
           summary: { user_id: "u1", period: 1, start: "2026-08-05", end: today, workout_count: 1, active_days: 1, total_duration_seconds: 1800 }
         });
