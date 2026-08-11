@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "./api";
 import type { WorkoutItemInput } from "./api";
+import type { Plan } from "../../shared/api/contracts";
 
 export function usePlansQuery(page: number, pageSize = 20) {
   return useQuery({
@@ -22,6 +23,17 @@ export function useCreatePlanMutation() {
     mutationFn: (input: { name: string }) => api.createPlan(input, crypto.randomUUID()),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["plans"] });
+    }
+  });
+}
+
+export function useUpdatePlanMutation(planId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; status: Plan["status"] }) => api.updatePlan(planId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["plans"] });
+      void queryClient.invalidateQueries({ queryKey: ["plan", planId] });
     }
   });
 }

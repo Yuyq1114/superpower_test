@@ -4,6 +4,7 @@ import { ApiError } from "../../shared/api/client";
 import type { WorkoutDay } from "../../shared/api/contracts";
 import { Button } from "../../shared/ui/Button";
 import { Feedback } from "../../shared/ui/Feedback";
+import { PlanEditForm, planStatusLabels, type PlanEditFormValues } from "./PlanEditForm";
 import { WorkoutDayForm } from "./WorkoutDayForm";
 import { WorkoutItemForm } from "./WorkoutItemForm";
 import {
@@ -12,6 +13,7 @@ import {
   useDeleteWorkoutDayMutation,
   useDeleteWorkoutItemMutation,
   usePlanQuery,
+  useUpdatePlanMutation,
   useWorkoutDaysQuery,
   useWorkoutItemsQuery
 } from "./queries";
@@ -70,10 +72,17 @@ export function PlanDetailPage() {
   const daysQuery = useWorkoutDaysQuery(id, planQuery.isSuccess);
   const createDay = useCreateWorkoutDayMutation(id);
   const deleteDay = useDeleteWorkoutDayMutation(id);
+  const updatePlan = useUpdatePlanMutation(id);
   const [expandedDayId, setExpandedDayId] = useState<string | null>(null);
+  const [isEditingPlan, setIsEditingPlan] = useState(false);
 
   async function handleCreateDay(values: { date: string }) {
     await createDay.mutateAsync(values.date);
+  }
+
+  async function handleUpdatePlan(values: PlanEditFormValues) {
+    await updatePlan.mutateAsync(values);
+    setIsEditingPlan(false);
   }
 
   function handleDeleteDay(day: WorkoutDay) {
@@ -104,6 +113,9 @@ export function PlanDetailPage() {
   return (
     <section>
       <h1>{plan.name}</h1>
+      <p>状态：{planStatusLabels[plan.status]}</p>
+      <Button onClick={() => setIsEditingPlan((visible) => !visible)}>编辑计划</Button>
+      {isEditingPlan ? <PlanEditForm plan={plan} onSubmit={handleUpdatePlan} /> : null}
       <WorkoutDayForm onSubmit={handleCreateDay} />
 
       {daysQuery.isLoading ? <p role="status">加载中…</p> : null}

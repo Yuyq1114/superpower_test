@@ -31,9 +31,15 @@ function createFakeGateway(seedPlans: Plan[] = []) {
   let items: WorkoutItem[] = [];
   let idCounter = 0;
   const nextId = (prefix: string) => `${prefix}-${++idCounter}`;
-  const captured: { lastItemBody: ItemRequestBody | null; lastItemHeaders: Headers | null; deleteCalls: string[] } = {
+  const captured: {
+    lastItemBody: ItemRequestBody | null;
+    lastItemHeaders: Headers | null;
+    lastPlanUpdateBody: { name: string; status: Plan["status"] } | null;
+    deleteCalls: string[];
+  } = {
     lastItemBody: null,
     lastItemHeaders: null,
+    lastPlanUpdateBody: null,
     deleteCalls: []
   };
 
@@ -67,6 +73,17 @@ function createFakeGateway(seedPlans: Plan[] = []) {
         return HttpResponse.json({ code: "NOT_FOUND", message: "计划不存在", request_id: "req-404" }, { status: 404 });
       }
       return HttpResponse.json({ plan });
+    }),
+    http.put("/api/v1/plans/:planId", async ({ request, params }) => {
+      const body = (await request.json()) as { name: string; status: Plan["status"] };
+      captured.lastPlanUpdateBody = body;
+      const index = plans.findIndex((p) => p.id === params.planId);
+      if (index === -1) {
+        return HttpResponse.json({ code: "NOT_FOUND", message: "计划不存在", request_id: "req-404" }, { status: 404 });
+      }
+      const updated: Plan = { ...plans[index], name: body.name, status: body.status, updated_at: "2025-01-02T00:00:00Z" };
+      plans = plans.map((p, i) => (i === index ? updated : p));
+      return HttpResponse.json({ plan: updated });
     }),
     http.delete("/api/v1/plans/:planId", ({ params }) => {
       captured.deleteCalls.push(`plan:${params.planId}`);
@@ -277,5 +294,118 @@ describe("PlansPage / PlanDetailPage", () => {
     expect(await screen.findByText(/服务暂时不可用/)).toBeInTheDocument();
     expect(screen.getByText(/req-503/)).toBeInTheDocument();
     expect(screen.getByLabelText("计划名称")).toHaveValue("失败计划");
+  });
+
+  it("edits a plan's name and status and reflects the update after refetch", async () => {
+    const plan = makePlan({ id: "plan-edit", name: "旧计划名称", status: "draft" });
+    const gw = createFakeGateway([plan]);
+    server.use(...gw.handlers);
+    renderPlans("/plans/plan-edit");
+
+    await screen.findByText("旧计划名称");
+    expect(screen.getByText(/草稿/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "编辑计划" }));
+    const nameInput = screen.getByLabelText("计划名称");
+    await user.clear(nameInput);
+    await user.type(nameInput, "新的计划名称");
+    await user.selectOptions(screen.getByLabelText("状态"), "active");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByText("新的计划名称")).toBeInTheDocument();
+    expect(screen.queryByText("旧计划名称")).not.toBeInTheDocument();
+    expect(await screen.findByText(/进行中/)).toBeInTheDocument();
+    expect(gw.captured.lastPlanUpdateBody).toEqual({ name: "新的计划名称", status: "active" });
+  });
+
+  it("keeps edited plan values after a failed update", async () => {
+    const plan = makePlan({ id: "plan-edit-fail", name: "计划A", status: "draft" });
+    const gw = createFakeGateway([plan]);
+    server.use(...gw.handlers);
+    server.use(
+      http.put(
+        "/api/v1/plans/:planId",
+        () => HttpResponse.json({ code: "INTERNAL", message: "更新计划失败", request_id: "req-500" }, { status: 500 }),
+        { once: true }
+      )
+    );
+    renderPlans("/plans/plan-edit-fail");
+
+    await screen.findByText("计划A");
+    await user.click(screen.getByRole("button", { name: "编辑计划" }));
+    const nameInput = screen.getByLabelText("计划名称");
+    await user.clear(nameInput);
+    await user.type(nameInput, "计划B");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByText(/更新计划失败/)).toBeInTheDocument();
+    expect(screen.getByText(/req-500/)).toBeInTheDocument();
+    expect(screen.getByLabelText("计划名称")).toHaveValue("计划B");
+    expect(screen.getByText("计划A")).toBeInTheDocument();
+  });
+
+  it("rejects a workout item when sets, repetitions, and duration are all zero", async () => {
+    const plan = makePlan({ id: "plan-zero", name: "零值计划" });
+    const gw = createFakeGateway([plan]);
+    server.use(...gw.handlers);
+    renderPlans("/plans/plan-zero");
+
+    await screen.findByText("零值计划");
+    await user.type(screen.getByLabelText("日期"), "2025-03-01");
+    await user.click(screen.getByRole("button", { name: "新建训练日" }));
+    const dayToggle = await screen.findByRole("button", { name: "2025-03-01" });
+    await user.click(dayToggle);
+
+    await screen.findByText("暂无训练项目");
+    await user.type(screen.getByLabelText("训练项目名称"), "静态拉伸");
+    await user.click(screen.getByRole("button", { name: "保存训练项目" }));
+
+    expect(await screen.findByText(/组数、次数或时长至少一项大于\s*0/)).toBeInTheDocument();
+    expect(gw.captured.lastItemBody).toBe(null);
+    expect(screen.getByText("暂无训练项目")).toBeInTheDocument();
+  });
+
+  it("does not delete a workout day when the confirmation dialog is declined", async () => {
+    const plan = makePlan({ id: "plan-day-del", name: "训练日删除计划" });
+    const gw = createFakeGateway([plan]);
+    server.use(...gw.handlers);
+    renderPlans("/plans/plan-day-del");
+
+    await screen.findByText("训练日删除计划");
+    await user.type(screen.getByLabelText("日期"), "2025-04-01");
+    await user.click(screen.getByRole("button", { name: "新建训练日" }));
+    await screen.findByRole("button", { name: "2025-04-01" });
+
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(screen.getByRole("button", { name: "删除训练日" }));
+
+    expect(gw.captured.deleteCalls).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "2025-04-01" })).toBeInTheDocument();
+  });
+
+  it("does not delete a workout item when the confirmation dialog is declined", async () => {
+    const plan = makePlan({ id: "plan-item-del", name: "训练项目删除计划" });
+    const gw = createFakeGateway([plan]);
+    server.use(...gw.handlers);
+    renderPlans("/plans/plan-item-del");
+
+    await screen.findByText("训练项目删除计划");
+    await user.type(screen.getByLabelText("日期"), "2025-05-01");
+    await user.click(screen.getByRole("button", { name: "新建训练日" }));
+    const dayToggle = await screen.findByRole("button", { name: "2025-05-01" });
+    await user.click(dayToggle);
+
+    await screen.findByText("暂无训练项目");
+    await user.type(screen.getByLabelText("训练项目名称"), "平板支撑");
+    await user.clear(screen.getByLabelText("时长(秒)"));
+    await user.type(screen.getByLabelText("时长(秒)"), "60");
+    await user.click(screen.getByRole("button", { name: "保存训练项目" }));
+    await screen.findByText("平板支撑");
+
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(screen.getByRole("button", { name: "删除训练项目" }));
+
+    expect(gw.captured.deleteCalls).toHaveLength(0);
+    expect(screen.getByText("平板支撑")).toBeInTheDocument();
   });
 });
