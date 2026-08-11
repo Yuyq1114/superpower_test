@@ -263,11 +263,11 @@ func (h *handler) logout(c *gin.Context) {
 	ctx, x := h.grpcContext(c)
 	defer x()
 	_, e = h.d.Auth.Logout(ctx, &authv1.LogoutRequest{RefreshToken: rt})
+	clearRefreshCookie(c.Writer, h.d.Cookie)
 	if e != nil {
 		h.fail(c, e)
 		return
 	}
-	clearRefreshCookie(c.Writer, h.d.Cookie)
 	c.Status(204)
 }
 func (h *handler) createPlan(c *gin.Context) {
