@@ -22,7 +22,7 @@ describe("App", () => {
 
   it("renders the fitness application identity", async () => {
     render(<App />);
-    expect(screen.getByRole("navigation", { name: "主导航" })).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "今日训练" })).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "主导航" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "今日训练" })).toBeInTheDocument();
   });
 });
