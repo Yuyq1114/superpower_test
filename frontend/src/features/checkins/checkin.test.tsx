@@ -6,6 +6,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Plan, WorkoutDay, WorkoutItem } from "../../shared/api/contracts";
 import { server } from "../../test/server";
+import { todayLocalDate } from "../history/date";
 import { CheckinPage } from "./CheckinPage";
 
 function renderCheckin() {
@@ -97,6 +98,20 @@ async function fillCheckin(user: ReturnType<typeof userEvent.setup>, values: { d
   await user.clear(noteInput);
   await user.type(noteInput, values.note);
 }
+
+describe("CheckinPage date input", () => {
+  it("is a native date picker capped at today so a future logical date cannot be submitted by accident", async () => {
+    server.use(
+      http.get("/api/v1/plans", () => HttpResponse.json({ plans: [], page: { page: 1, page_size: 100, total: 0 } }))
+    );
+    renderCheckin();
+
+    const dateInput = await screen.findByLabelText("打卡日期");
+    expect(dateInput).toHaveAttribute("type", "date");
+    expect(dateInput).toHaveAttribute("max", todayLocalDate());
+    expect(dateInput).toHaveValue(todayLocalDate());
+  });
+});
 
 describe("CheckinPage", () => {
   const user = userEvent.setup();

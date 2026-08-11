@@ -1,6 +1,7 @@
 import { apiRequest } from "../../shared/api/client";
 import type { PageInfo, Plan, WorkoutDay, WorkoutItem } from "../../shared/api/contracts";
 import { normalizeList, normalizePage } from "../../shared/api/normalize";
+import { fetchAllPages } from "../../shared/api/pagination";
 
 export type WorkoutItemInput = {
   name: string;
@@ -15,6 +16,22 @@ export async function listPlans(page = 1, pageSize = 20): Promise<{ plans: Plan[
     `/plans?page=${page}&page_size=${pageSize}`
   );
   return { plans: normalizeList(result.plans), page: normalizePage(result.page, { page, page_size: pageSize }) };
+}
+
+/**
+ * Returns every plan across all pages, for selection UIs (dashboard,
+ * check-in) that show no pagination controls and must not silently drop
+ * plans that happen to live on a later page.
+ */
+export async function listAllPlans(): Promise<{ plans: Plan[]; page: PageInfo }> {
+  const { items, page } = await fetchAllPages(
+    async (pageNumber, pageSize) => {
+      const result = await listPlans(pageNumber, pageSize);
+      return { items: result.plans, page: result.page };
+    },
+    { resource: "plan list" }
+  );
+  return { plans: items, page };
 }
 
 export function getPlan(id: string): Promise<{ plan: Plan }> {
@@ -40,20 +57,29 @@ export function deletePlan(id: string): Promise<void> {
   return apiRequest(`/plans/${id}`, { method: "DELETE" });
 }
 
-// This call sends no `page`/`page_size` query params, so the { page: 1,
-// page_size: 20 } fallback below isn't a guess: it mirrors the gateway's own
-// default for unspecified pagination (see `func page(c *gin.Context)` in
-// services/api-gateway/internal/http/handlers.go, which defaults
-// `page=1`/`page_size=20` via `c.DefaultQuery`), applied whenever the
-// backend response itself omits `page` under `omitempty`.
-export async function listWorkoutDays(planId: string): Promise<{ workout_days: WorkoutDay[]; page: PageInfo }> {
+async function listWorkoutDaysPage(
+  planId: string,
+  page: number,
+  pageSize: number
+): Promise<{ items: WorkoutDay[]; page: PageInfo }> {
   const result = await apiRequest<{ workout_days?: WorkoutDay[]; page?: Partial<PageInfo> }>(
-    `/plans/${planId}/days`
+    `/plans/${planId}/days?page=${page}&page_size=${pageSize}`
   );
-  return {
-    workout_days: normalizeList(result.workout_days),
-    page: normalizePage(result.page, { page: 1, page_size: 20 })
-  };
+  return { items: normalizeList(result.workout_days), page: normalizePage(result.page, { page, page_size: pageSize }) };
+}
+
+/**
+ * Returns every workout day of a plan, not just the first page. Callers
+ * (dashboard "today", the check-in day picker, the plan detail list) all need
+ * the complete set and have no pagination UI, so the walk happens here; the
+ * returned `page` describes the aggregate.
+ */
+export async function listWorkoutDays(planId: string): Promise<{ workout_days: WorkoutDay[]; page: PageInfo }> {
+  const { items, page } = await fetchAllPages(
+    (pageNumber, pageSize) => listWorkoutDaysPage(planId, pageNumber, pageSize),
+    { resource: "workout day list" }
+  );
+  return { workout_days: items, page };
 }
 
 export function createWorkoutDay(
@@ -72,13 +98,22 @@ export function deleteWorkoutDay(planId: string, dayId: string): Promise<void> {
   return apiRequest(`/plans/${planId}/days/${dayId}`, { method: "DELETE" });
 }
 
-// Same reasoning as listWorkoutDays above: no page/page_size params are
-// sent, so { page: 1, page_size: 20 } mirrors the gateway's own default.
-export async function listWorkoutItems(dayId: string): Promise<{ items: WorkoutItem[]; page: PageInfo }> {
+async function listWorkoutItemsPage(
+  dayId: string,
+  page: number,
+  pageSize: number
+): Promise<{ items: WorkoutItem[]; page: PageInfo }> {
   const result = await apiRequest<{ items?: WorkoutItem[]; page?: Partial<PageInfo> }>(
-    `/workout-days/${dayId}/items`
+    `/workout-days/${dayId}/items?page=${page}&page_size=${pageSize}`
   );
-  return { items: normalizeList(result.items), page: normalizePage(result.page, { page: 1, page_size: 20 }) };
+  return { items: normalizeList(result.items), page: normalizePage(result.page, { page, page_size: pageSize }) };
+}
+
+/** Returns every workout item of a day; see `listWorkoutDays` for the rationale. */
+export function listWorkoutItems(dayId: string): Promise<{ items: WorkoutItem[]; page: PageInfo }> {
+  return fetchAllPages((page, pageSize) => listWorkoutItemsPage(dayId, page, pageSize), {
+    resource: "workout item list"
+  });
 }
 
 export function createWorkoutItem(

@@ -95,6 +95,45 @@ func TestConsumeIsIdempotentAndUserIsolated(t *testing.T) {
 	}
 }
 
+// End-to-end proof of the WorkoutCompleted v1 semantics against real
+// PostgreSQL: an event whose `completed_at` is last week's logical workout
+// date must be summarized into last week's bucket even though it is being
+// consumed (written) during the following week.
+func TestBackfilledLogicalDateIsSummarizedIntoTheWeekItWasTrained(t *testing.T) {
+	db, schema := integrationDB(t)
+	r := GORM{DB: db, Schema: schema}
+	ctx := context.Background()
+
+	logicalDate := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)    // Wednesday
+	writeInstant := time.Date(2026, 8, 11, 9, 30, 0, 0, time.UTC) // the following Tuesday
+	trainedWeek := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)    // Monday of the trained week
+	writtenWeek := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)   // Monday of the write week
+
+	event := model.WorkoutCompleted{EventID: "backfill-1", EventType: model.WorkoutCompletedType, UserID: "backfill-user", CheckinID: "c-backfill", CompletedAt: logicalDate, OccurredAt: writeInstant}
+	if err := r.ConsumeWorkoutCompleted(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	// Redelivery of the same event must stay idempotent.
+	if err := r.ConsumeWorkoutCompleted(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+
+	trained, err := r.GetSummary(ctx, event.UserID, model.PeriodWeek, trainedWeek, trainedWeek.AddDate(0, 0, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trained.WorkoutCount != 1 || trained.ActiveDays != 1 {
+		t.Fatalf("trained week summary=%#v, want exactly one workout on one active day", trained)
+	}
+	written, err := r.GetSummary(ctx, event.UserID, model.PeriodWeek, writtenWeek, writtenWeek.AddDate(0, 0, 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written.WorkoutCount != 0 || written.ActiveDays != 0 {
+		t.Fatalf("write week summary=%#v, want zero: the event must not be counted in the week it was written", written)
+	}
+}
+
 func TestTransactionFailureRollsBackProcessedEvent(t *testing.T) {
 	db, schema := integrationDB(t)
 	r := GORM{DB: db, Schema: schema}

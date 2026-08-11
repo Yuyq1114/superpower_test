@@ -22,6 +22,25 @@ export function subtractLocalDays(date: Date, days: number): Date {
   return local;
 }
 
+/**
+ * Returns the Monday that starts `date`'s local ISO week (Monday..Sunday).
+ * The statistics service buckets weekly summaries from Monday UTC midnight,
+ * so every "this week" window in the UI must be anchored the same way.
+ */
+export function startOfLocalWeek(date: Date = new Date()): Date {
+  const local = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const mondayOffset = (local.getDay() + 6) % 7;
+  local.setDate(local.getDate() - mondayOffset);
+  return local;
+}
+
+/** The local ISO week (Monday..Sunday) containing `now`, as YYYY-MM-DD bounds. */
+export function localWeekRange(now: Date = new Date()): { from: string; to: string } {
+  const monday = startOfLocalWeek(now);
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+  return { from: formatLocalDate(monday), to: formatLocalDate(sunday) };
+}
+
 /** Default history range: the 30 local calendar days ending today (inclusive). */
 export function defaultHistoryRange(now: Date = new Date()): { from: string; to: string } {
   const to = formatLocalDate(now);

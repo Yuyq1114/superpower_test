@@ -55,9 +55,10 @@ npx playwright install chromium
 
 测试覆盖：
 
-- `e2e/auth.spec.ts`：注册后仪表盘可见；access token 只存在于内存，`localStorage`/`sessionStorage` 全程为空；`fitness_refresh` 是 `HttpOnly`、`Path=/api/v1/auth` 的 cookie；刷新页面后仅凭该 cookie 恢复会话；登出清除 cookie 并回到登录页；未登录访问受保护路由会带 `returnTo` 跳转登录页。
-- `e2e/fitness-flow.spec.ts`：注册 → 创建计划并置为进行中 → 创建今天的训练日与训练项目 → 在打卡页选择计划/训练日/项目完成打卡 → 历史页验证记录与备注 → 个人页保存体重并验证"最新体重" → 首页仪表盘验证当前计划、今日项目、连续天数、最近打卡备注，并等待本周训练统计（依赖 Redis Stream 异步消费，不是同步写入）最终一致。
-- `e2e/accessibility.spec.ts`：使用 `@axe-core/playwright` 对登录页、注册页、认证后的首页仪表盘、计划创建表单跑自动化可访问性检查；两个 Playwright project（`desktop`/`mobile`）都要求 `violations` 严格为空数组。
+- `e2e/auth.spec.ts`：注册后仪表盘可见；access token 只存在于内存，`localStorage`/`sessionStorage` 全程为空；`fitness_refresh` 是 `HttpOnly`、`Path=/api/v1/auth` 的 cookie；刷新页面后仅凭该 cookie 恢复会话；登出清除 cookie 并回到登录页；未登录访问受保护路由会带 `returnTo` 跳转登录页。另有一组"登出失败恢复"用例：登出返回 401 视为"已登出"，直接回到登录页且不显示错误横幅；登出与其自动 refresh 重试都返回 401（既无有效 access token 也无有效会话）时同样能恢复到登录页；登出持续返回服务端错误时，只提供"清除本地会话"的出口，不谎称服务端已登出。
+- `e2e/fitness-flow.spec.ts`：注册 → 创建计划并置为进行中 → 创建今天的训练日与训练项目 → 在打卡页选择计划/训练日/项目完成打卡 → 历史页验证记录与备注 → 个人页保存体重并验证"最新体重" → 首页仪表盘验证当前计划、今日项目、连续天数、最近打卡备注，并等待本周训练统计（依赖 Redis Stream 异步消费，不是同步写入）最终一致。仪表盘的"本周"窗口是本地 ISO 周（周一至周日），与统计服务的周 bucket 对齐。
+- `e2e/accessibility.spec.ts`：使用 `@axe-core/playwright` 对 6 个页面/状态跑自动化可访问性检查——登录页、注册页、认证后的首页仪表盘、计划创建表单、打卡表单、身体数据（我的）页；两个 Playwright project（`desktop`/`mobile`）都要求 `violations` 严格为空数组。
+- `e2e/layout.spec.ts`：按当前 viewport 断言导航布局——移动端（<768px）底部单行导航栏贴合视口底部、5 个导航链接与登出按钮均满足 44×44 触控目标、`#main-content` 预留了不小于导航栏高度的 `padding-bottom`；桌面端（≥768px）为纵向侧边栏且登出按钮位于导航块下方。该用例不会 skip：缺少显式 viewport 会直接失败。
 
 每个需要登录的测试都通过 `e2e/helpers.ts` 的 `registerNewUser` 用 `crypto.randomUUID()` 生成的邮箱注册一个全新账号，测试之间不会互相污染或依赖执行顺序。
 

@@ -91,6 +91,10 @@ make k8s-down
 
 `k8s-up` 在 `secret.env` 缺失时拒绝执行，不生成 secret，也不会提交它。执行前必须确认 `kubectl config current-context`、namespace 和集群；`kubectl apply/delete -k` 作用于当前 context，误用生产 context 可能造成真实破坏。自 Task 8 起，`frontend` 是唯一的浏览器 NodePort `30080`（同源提供静态资源与 `/api/v1/*` 反向代理），`api-gateway` 改为集群内部 `ClusterIP`，不再直接暴露；Prometheus 服务端口为 `9090`，Grafana 为 `3000`。
 
+**NodePort 只支持已配置的 Origin。** `deploy/k8s/base/configmap.yaml` 中 `ALLOWED_ORIGINS: http://127.0.0.1:30080,http://localhost:30080`，Gateway 会对 `/api/v1/auth/refresh` 与 `/api/v1/auth/logout` 做 Origin 校验。因此只有通过 `http://127.0.0.1:30080` 或 `http://localhost:30080` 访问才能正常刷新会话/登出；如果需要从节点 IP、LAN 地址或域名（例如 `http://192.168.1.10:30080`、`http://fitness.example.internal:30080`）访问，必须把该 Origin 加入 `ALLOWED_ORIGINS` 后重新 apply 并 `rollout restart deployment/api-gateway`，否则刷新与登出会返回 401。
+
+`frontend` 的三个探针（startup/readiness/liveness）都只探测容器本地的 `/healthz`，不依赖 Gateway：Gateway 降级时前端 Pod 仍然 Ready，浏览器能拿到页面并看到应用内的 API 错误，而不是连接失败。`/api-readyz`（代理到 Gateway 的 `/readyz`）与 `/api-healthz` 保留为人工诊断端点，不作为探针目标。
+
 在应用前，先为每个服务和前端构建 `dev` 镜像（Docker Desktop 内置的单节点 Kubernetes 与本机 `docker build` 共享同一个镜像存储，不需要额外 push/load）：
 
 ```bash

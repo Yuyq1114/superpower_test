@@ -173,10 +173,16 @@ export function CheckinPage() {
           </div>
         ) : null}
 
+        {/*
+          `max` keeps the picker from offering a future training day; the
+          check-in service enforces the same bound server-side, since this
+          attribute is only a client-side hint.
+        */}
         <Field label="打卡日期" htmlFor="checkin-date">
           <input
             id="checkin-date"
-            placeholder="YYYY-MM-DD"
+            type="date"
+            max={todayLocalDate()}
             value={date}
             onChange={(event) => setDate(event.target.value)}
           />

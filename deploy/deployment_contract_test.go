@@ -170,6 +170,77 @@ func TestFrontendDeploymentDeclaresOperationalSafety(t *testing.T) {
 	}
 }
 
+// extractInlineMapping returns the body of a `<key>: { ... }` inline YAML
+// mapping, respecting nested braces, so a probe can be asserted on precisely
+// instead of via a substring search that any of the three probes could
+// satisfy.
+func extractInlineMapping(t *testing.T, text, key string) string {
+	t.Helper()
+	marker := key + ": {"
+	start := strings.Index(text, marker)
+	if start < 0 {
+		t.Fatalf("missing inline mapping for %q", key)
+	}
+	i := start + len(marker)
+	depth := 1
+	for depth > 0 {
+		if i >= len(text) {
+			t.Fatalf("unterminated inline mapping for %q", key)
+		}
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+		i++
+	}
+	return text[start+len(marker) : i-1]
+}
+
+// The frontend serves the SPA shell from its own container and only reverse
+// proxies /api/v1/* to the gateway. Wiring its readiness probe to the
+// gateway-dependent /api-readyz would take the frontend Pod out of the
+// NodePort's endpoint list whenever the gateway is degraded, so the browser
+// would get a connection failure instead of a rendered app that can surface
+// the API error itself. All three probes must therefore stay local.
+func TestFrontendProbesAreLocalAndNeverDependOnTheGateway(t *testing.T) {
+	text := read(t, "k8s/base/frontend.yaml")
+	for _, probe := range []string{"startupProbe", "readinessProbe", "livenessProbe"} {
+		body := extractInlineMapping(t, text, probe)
+		httpGet := extractInlineMapping(t, body, "httpGet")
+		if !strings.Contains(httpGet, "path: /healthz") {
+			t.Errorf("%s must probe the locally served path /healthz, got httpGet {%s}", probe, httpGet)
+		}
+		if !strings.Contains(httpGet, "port: http") {
+			t.Errorf("%s must probe the named container port http, got httpGet {%s}", probe, httpGet)
+		}
+		if strings.Contains(httpGet, "/api-readyz") || strings.Contains(httpGet, "/api-healthz") {
+			t.Errorf("%s must not depend on the api-gateway; got httpGet {%s}", probe, httpGet)
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if strings.Contains(line, "/api-readyz") || strings.Contains(line, "/api-healthz") {
+			t.Errorf("k8s/base/frontend.yaml must not wire any gateway-backed path into the manifest: %q", strings.TrimSpace(line))
+		}
+	}
+}
+
+// /api-readyz stays available as an operator diagnostics endpoint even though
+// no probe uses it any more.
+func TestFrontendKeepsGatewayDiagnosticsEndpoint(t *testing.T) {
+	conf := read(t, "../frontend/nginx/nginx.conf")
+	if !strings.Contains(conf, "location = /api-readyz") {
+		t.Fatal("nginx.conf must keep /api-readyz as a gateway readiness diagnostics endpoint")
+	}
+	if !strings.Contains(conf, "location = /api-healthz") {
+		t.Fatal("nginx.conf must keep /api-healthz as a gateway liveness diagnostics endpoint")
+	}
+}
+
 func TestFrontendDeploymentContract(t *testing.T) {
 	text := read(t, "k8s/base/frontend.yaml")
 	for _, required := range []string{
@@ -178,8 +249,6 @@ func TestFrontendDeploymentContract(t *testing.T) {
 		"containerPort: 8080",
 		"runAsUser: 101",
 		"runAsGroup: 101",
-		"httpGet: {path: /healthz, port: http}",
-		"httpGet: {path: /api-readyz, port: http}",
 		"requests: {cpu: 25m, memory: 32Mi}",
 		"limits: {cpu: 200m, memory: 128Mi}",
 	} {

@@ -43,21 +43,21 @@ export function HistoryPage() {
       <h1>训练历史</h1>
 
       <div className={styles.filters}>
+        {/*
+          A native date picker only ever emits a complete YYYY-MM-DD (or an
+          empty string), so the query can't fire on a half-typed value that
+          the backend answers with 400.
+        */}
         <Field label="起始日期" htmlFor="history-from">
           <input
             id="history-from"
-            placeholder="YYYY-MM-DD"
+            type="date"
             value={from}
             onChange={(event) => handleFromChange(event.target.value)}
           />
         </Field>
         <Field label="结束日期" htmlFor="history-to">
-          <input
-            id="history-to"
-            placeholder="YYYY-MM-DD"
-            value={to}
-            onChange={(event) => handleToChange(event.target.value)}
-          />
+          <input id="history-to" type="date" value={to} onChange={(event) => handleToChange(event.target.value)} />
         </Field>
       </div>
 
@@ -80,12 +80,16 @@ export function HistoryPage() {
 
       {historyQuery.data && checkins.length === 0 ? <p>暂无打卡记录</p> : null}
 
+      {/*
+        The history contract carries no workout item name, only the opaque
+        `workout_item_id`, so there is nothing meaningful to show the user
+        about which item each entry completed.
+      */}
       {checkins.length > 0 ? (
         <ul className={styles.list}>
           {checkins.map((checkin) => (
             <li key={checkin.id} className={styles.card}>
               <span className={styles.date}>{checkin.date}</span>
-              <span>{checkin.workout_item_id}</span>
               <span className={styles.note}>{checkin.note || "（无备注）"}</span>
               <span>完成于 {checkin.completed_at}</span>
             </li>

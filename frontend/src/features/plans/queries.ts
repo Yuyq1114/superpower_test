@@ -11,27 +11,17 @@ export function usePlansQuery(page: number, pageSize = 20) {
 }
 
 /**
- * Fetches every plan across all pages (page_size=100) and returns only the
- * active ones. Intended for selection UIs (e.g. check-in forms) that must not
- * silently truncate to a single page. Terminates as soon as a page comes back
- * empty or the running total reaches `page.total`, with a hard cap on the
- * number of pages fetched as a defensive guard against malformed pagination
- * data from the server.
+ * Fetches every plan across all pages and returns only the active ones.
+ * Intended for selection UIs (e.g. check-in forms) that must not silently
+ * truncate to a single page; `listAllPlans` raises `ApiContractError` rather
+ * than returning a partial list if the server's pagination never terminates.
  */
 export function useActivePlansQuery() {
   return useQuery({
     queryKey: ["plans", "active-all"],
     queryFn: async () => {
-      const requestPageSize = 100;
-      const maxPages = 1000;
-      const all: Plan[] = [];
-      for (let page = 1; page <= maxPages; page++) {
-        const response = await api.listPlans(page, requestPageSize);
-        if (response.plans.length === 0) break;
-        all.push(...response.plans);
-        if (all.length >= response.page.total) break;
-      }
-      return all.filter((plan) => plan.status === "active");
+      const { plans } = await api.listAllPlans();
+      return plans.filter((plan) => plan.status === "active");
     }
   });
 }

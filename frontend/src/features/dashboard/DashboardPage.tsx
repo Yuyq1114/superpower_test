@@ -5,7 +5,7 @@ import { Button } from "../../shared/ui/Button";
 import { Card } from "../../shared/ui/Card";
 import { Feedback } from "../../shared/ui/Feedback";
 import { latestMetric, useMetricsQuery } from "../body-metrics/queries";
-import { formatLocalDate, subtractLocalDays, todayLocalDate } from "../history/date";
+import { localWeekRange, todayLocalDate } from "../history/date";
 import { useHistoryQuery, useStreakQuery } from "../history/queries";
 import { useActivePlansQuery, useWorkoutDaysQuery, useWorkoutItemsQuery } from "../plans/queries";
 import styles from "./DashboardPage.module.css";
@@ -13,21 +13,22 @@ import { STATISTICS_POLL_BUDGET_MS, useWeeklyStatisticsQuery } from "./queries";
 
 const RECENT_CHECKINS_PAGE_SIZE = 5;
 
-function weekRange(now: Date = new Date()): { from: string; to: string } {
-  return { from: formatLocalDate(subtractLocalDays(now, 6)), to: todayLocalDate(now) };
-}
-
 /**
  * Renders the weekly statistics summary and manages its own bounded polling
  * budget. Mounted by `DashboardPage` only once `historyQuery` has
  * succeeded, so the lazy `useState` initializer below captures "now" at the
  * exact moment the query becomes enabled, not at `DashboardPage` mount
- * time. The caller also remounts this component (via `key={expectedTotal}`)
- * whenever the target checkin count changes, so a new target starts with
- * its own full 20s budget instead of inheriting a stale deadline.
+ * time. The caller also remounts this component (via `key`) whenever the
+ * target checkin count or the week changes, so a new target starts with its
+ * own full 20s budget instead of inheriting a stale deadline.
+ *
+ * `expectedTotal` and the polled summary must describe the SAME window:
+ * both are scoped to `weekStart`'s Monday..Sunday ISO week, so "caught up"
+ * is a like-for-like comparison instead of a rolling-7-days count that can
+ * never converge on the server's Monday-aligned bucket.
  */
-function WeeklyStatisticsCard(props: { expectedTotal: number }) {
-  const { expectedTotal } = props;
+function WeeklyStatisticsCard(props: { expectedTotal: number; weekStart: string }) {
+  const { expectedTotal, weekStart } = props;
   const [deadline, setDeadline] = useState(() => Date.now() + STATISTICS_POLL_BUDGET_MS);
   const [deadlinePassed, setDeadlinePassed] = useState(false);
 
@@ -38,7 +39,7 @@ function WeeklyStatisticsCard(props: { expectedTotal: number }) {
     return () => clearTimeout(timer);
   }, [deadline]);
 
-  const statisticsQuery = useWeeklyStatisticsQuery({ deadline, targetCheckinCount: expectedTotal });
+  const statisticsQuery = useWeeklyStatisticsQuery({ deadline, targetCheckinCount: expectedTotal, weekStart });
 
   function handleRetry() {
     setDeadlinePassed(false);
@@ -67,7 +68,10 @@ function WeeklyStatisticsCard(props: { expectedTotal: number }) {
 }
 
 export function DashboardPage() {
-  const [range] = useState(() => weekRange());
+  // The "本周" cards (recent check-ins and statistics) must both describe the
+  // current local ISO week, which is exactly the window the statistics
+  // service buckets into.
+  const [range] = useState(() => localWeekRange());
   const todayDate = todayLocalDate();
 
   const activePlansQuery = useActivePlansQuery();
@@ -184,7 +188,11 @@ export function DashboardPage() {
         ) : null}
         {historyQuery.isLoading ? <p role="status">统计加载中…</p> : null}
         {historyQuery.isSuccess ? (
-          <WeeklyStatisticsCard key={targetCheckinCount} expectedTotal={targetCheckinCount} />
+          <WeeklyStatisticsCard
+            key={`${range.from}:${targetCheckinCount}`}
+            expectedTotal={targetCheckinCount}
+            weekStart={range.from}
+          />
         ) : null}
       </Card>
 

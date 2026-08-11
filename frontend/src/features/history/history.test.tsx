@@ -100,6 +100,31 @@ describe("HistoryPage", () => {
     expect(await screen.findByText("深蹲三组")).toBeInTheDocument();
   });
 
+  // A free-text field fires a request on every keystroke, so typing a date
+  // sends partial values like "2" or "2026-0" that the backend rejects with
+  // 400 and the UI renders as an error banner mid-typing.
+  it("uses native date inputs instead of free text", async () => {
+    const gw = createFakeGateway([makeCheckin({ id: "c1", date: "2026-08-10" })]);
+    server.use(...gw.handlers);
+    renderHistory();
+
+    expect(screen.getByLabelText("起始日期")).toHaveAttribute("type", "date");
+    expect(screen.getByLabelText("结束日期")).toHaveAttribute("type", "date");
+  });
+
+  // `workout_item_id` is an opaque UUID and the history contract carries no
+  // item name, so rendering it just shows the user a meaningless identifier.
+  it("does not render the raw workout item id", async () => {
+    const gw = createFakeGateway([
+      makeCheckin({ id: "c1", date: "2026-08-10", note: "深蹲三组", workout_item_id: "item-abc-123" })
+    ]);
+    server.use(...gw.handlers);
+    renderHistory();
+
+    expect(await screen.findByText("深蹲三组")).toBeInTheDocument();
+    expect(screen.queryByText(/item-abc-123/)).not.toBeInTheDocument();
+  });
+
   it("shows an empty state when there are no checkins in range", async () => {
     const gw = createFakeGateway([]);
     server.use(...gw.handlers);

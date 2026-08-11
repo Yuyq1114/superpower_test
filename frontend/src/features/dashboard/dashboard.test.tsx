@@ -5,7 +5,7 @@ import { delay, http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Checkin, Metric, Plan, WorkoutDay, WorkoutItem } from "../../shared/api/contracts";
 import { server } from "../../test/server";
-import { todayLocalDate } from "../history/date";
+import { formatLocalDate, localWeekRange, startOfLocalWeek, subtractLocalDays, todayLocalDate } from "../history/date";
 import { DashboardPage } from "./DashboardPage";
 
 function renderDashboard() {
@@ -84,6 +84,45 @@ describe("DashboardPage", () => {
     vi.useRealTimers();
   });
 
+  // The statistics service buckets weekly summaries Monday..Sunday from UTC
+  // midnight. A rolling "last 7 days" window would make the recent-checkin
+  // total (the polling target) and the server's weekly count describe
+  // different sets of days, so the dashboard would keep polling for a whole
+  // 20s budget and then show a false failure on any normal week rollover.
+  it("asks for the current local ISO week in both the history range and the statistics start", async () => {
+    const requests: { historyFrom: string | null; historyTo: string | null; statisticsStart: string | null } = {
+      historyFrom: null,
+      historyTo: null,
+      statisticsStart: null
+    };
+    server.use(
+      plansHandler([]),
+      streakHandler(0),
+      http.get("/api/v1/checkins", ({ request }) => {
+        const url = new URL(request.url);
+        requests.historyFrom = url.searchParams.get("from");
+        requests.historyTo = url.searchParams.get("to");
+        return HttpResponse.json({ checkins: [], page: { page: 1, page_size: 5, total: 0 }, streak: 0 });
+      }),
+      metricsHandler([]),
+      http.get("/api/v1/statistics/summary", ({ request }) => {
+        requests.statisticsStart = new URL(request.url).searchParams.get("start");
+        return HttpResponse.json({
+          summary: { user_id: "u1", period: 1, start: "2026-08-10", end: "2026-08-16", workout_count: 0, active_days: 0, total_duration_seconds: 0 }
+        });
+      })
+    );
+    renderDashboard();
+
+    expect(await screen.findByText("本周训练 0 次，活跃 0 天")).toBeInTheDocument();
+
+    const week = localWeekRange();
+    expect(requests.historyFrom).toBe(week.from);
+    expect(requests.historyTo).toBe(week.to);
+    expect(requests.statisticsStart).toBe(`${week.from}T00:00:00Z`);
+    expect(formatLocalDate(startOfLocalWeek(new Date(`${week.from}T12:00:00`)))).toBe(week.from);
+  });
+
   it("renders a full actionable dashboard summary", async () => {
     const today = todayLocalDate();
     const plans: Plan[] = [
@@ -138,6 +177,51 @@ describe("DashboardPage", () => {
     expect(screen.getByText("最新体重：70.5 kg")).toBeInTheDocument();
     expect(screen.getByText("最新体脂率：18%")).toBeInTheDocument();
     expect(screen.getByText(/完成深蹲/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新获取统计" })).not.toBeInTheDocument();
+  });
+
+  // A check-in from *before* this ISO week belongs to the previous week's
+  // bucket server-side. With a rolling last-7-days window the dashboard would
+  // count it as a target the weekly summary can never reach, burn the whole
+  // 20s budget and then claim failure. (On a Sunday the two windows coincide,
+  // so this fixture merely stops discriminating that day -- it never flakes.)
+  it("does not chase check-ins that fall outside the current ISO week", async () => {
+    vi.useFakeTimers();
+    const week = localWeekRange();
+    const beforeThisWeek = formatLocalDate(subtractLocalDays(startOfLocalWeek(new Date()), 1));
+    let statisticsRequestCount = 0;
+    server.use(
+      plansHandler([]),
+      streakHandler(0),
+      http.get("/api/v1/checkins", ({ request }) => {
+        const url = new URL(request.url);
+        const from = url.searchParams.get("from") ?? "";
+        const to = url.searchParams.get("to") ?? "";
+        const seeded = [makeCheckin({ id: "c-old", date: beforeThisWeek })];
+        const inRange = seeded.filter((checkin) => checkin.date >= from && checkin.date <= to);
+        return HttpResponse.json({
+          checkins: inRange,
+          page: { page: 1, page_size: 5, total: inRange.length },
+          streak: 0
+        });
+      }),
+      metricsHandler([]),
+      http.get("/api/v1/statistics/summary", () => {
+        statisticsRequestCount += 1;
+        return HttpResponse.json({
+          summary: { user_id: "u1", period: 1, start: week.from, end: week.to, workout_count: 0, active_days: 0, total_duration_seconds: 0 }
+        });
+      })
+    );
+    renderDashboard();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(screen.getByText("本周训练 0 次，活跃 0 天")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新获取统计" })).not.toBeInTheDocument();
+
+    const settledCount = statisticsRequestCount;
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(statisticsRequestCount).toBe(settledCount);
     expect(screen.queryByRole("button", { name: "重新获取统计" })).not.toBeInTheDocument();
   });
 

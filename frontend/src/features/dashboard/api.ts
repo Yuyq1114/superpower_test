@@ -4,13 +4,15 @@ import type { Summary } from "../../shared/api/contracts";
 export type SummaryPeriod = "week" | "month";
 
 /**
- * The statistics service requires a non-empty, RFC3339 `start` (it rejects
- * an empty query param with `start is required` instead of defaulting to
- * "now" the way its internal service layer optionally supports), so this
- * always sends the current instant explicitly and lets the server bucket it
- * into the containing week/month.
+ * `weekStart` is the local ISO week's Monday as YYYY-MM-DD. It is sent as
+ * that day's UTC midnight because the statistics service buckets weeks from
+ * Monday UTC midnight: passing "now" instead would silently select a
+ * different week than the one the dashboard's own history range covers for
+ * any client whose local week boundary sits on the other side of UTC
+ * midnight. The service also rejects an empty `start` outright
+ * ("start is required"), so it is never omitted.
  */
-export function getSummary(period: SummaryPeriod): Promise<{ summary: Summary }> {
-  const start = encodeURIComponent(new Date().toISOString());
+export function getSummary(period: SummaryPeriod, weekStart: string): Promise<{ summary: Summary }> {
+  const start = encodeURIComponent(`${weekStart}T00:00:00Z`);
   return apiRequest(`/statistics/summary?period=${period}&start=${start}`);
 }

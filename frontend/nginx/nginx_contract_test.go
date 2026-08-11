@@ -148,6 +148,49 @@ func TestHealthAndReadyProxyToGatewayCorrectly(t *testing.T) {
 	}
 }
 
+// securityHeaders is the baseline every HTML/asset/API response served
+// through this nginx must carry.
+var securityHeaders = []string{"X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options"}
+
+func TestServerDeclaresBaselineSecurityHeaders(t *testing.T) {
+	text := readConf(t)
+	for _, want := range []string{
+		`add_header X-Content-Type-Options "nosniff" always;`,
+		`add_header Referrer-Policy "no-referrer" always;`,
+		`add_header X-Frame-Options "DENY" always;`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("nginx.conf must declare %s (with `always`, so it also applies to error and 30x responses)", want)
+		}
+	}
+}
+
+// nginx's add_header is NOT additive across levels: a location that declares
+// any add_header of its own drops every add_header inherited from the server
+// block. Any location that sets a header must therefore repeat the security
+// baseline, or /assets/* and the SPA shell itself would ship without it.
+func TestEveryLocationWithItsOwnHeadersRepeatsTheSecurityBaseline(t *testing.T) {
+	blocks := extractLocationBlocks(t, readConf(t))
+	checked := 0
+	for path, body := range blocks {
+		if !strings.Contains(body, "add_header") {
+			continue
+		}
+		checked++
+		for _, header := range securityHeaders {
+			if !strings.Contains(body, "add_header "+header) {
+				t.Errorf("location %s declares its own add_header, which discards the inherited ones; it must repeat %s", path, header)
+			}
+		}
+		if !strings.Contains(body, "always") {
+			t.Errorf("location %s must mark its security headers with `always`", path)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("expected at least one location with its own add_header directives")
+	}
+}
+
 func TestApiLocationForwardsRequestContext(t *testing.T) {
 	text := readConf(t)
 	blocks := extractLocationBlocks(t, text)
