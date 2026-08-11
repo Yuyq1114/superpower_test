@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Checkin, Metric, Plan, WorkoutDay, WorkoutItem } from "../../shared/api/contracts";
 import { server } from "../../test/server";
@@ -147,22 +147,32 @@ describe("DashboardPage", () => {
     expect(screen.getByText("暂无训练计划，先去创建一个吧")).toBeInTheDocument();
   });
 
-  it("treats a non-week statistics period as a contract error instead of a success", async () => {
+  it("treats a non-week statistics period as a contract error instead of a success, and does not poll on it", async () => {
+    vi.useFakeTimers();
+    let statisticsRequestCount = 0;
     server.use(
       plansHandler([]),
       streakHandler(0),
       historyHandler([makeCheckin({ id: "c1" })], 1),
       metricsHandler([]),
-      http.get("/api/v1/statistics/summary", () =>
-        HttpResponse.json({
+      http.get("/api/v1/statistics/summary", () => {
+        statisticsRequestCount += 1;
+        return HttpResponse.json({
           summary: { user_id: "u1", period: 2, start: "2026-08-05", end: "2026-08-11", workout_count: 1, active_days: 1, total_duration_seconds: 900 }
-        })
-      )
+        });
+      })
     );
     renderDashboard();
 
-    expect(await screen.findByText(/加载本周统计失败/)).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(screen.getByText(/加载本周统计失败/)).toBeInTheDocument();
     expect(screen.queryByText(/本周训练/)).not.toBeInTheDocument();
+    expect(statisticsRequestCount).toBe(1);
+
+    // A contract-error response must not be retried automatically (retry: false)
+    // and must not keep polling even though the 20s budget has not elapsed.
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(statisticsRequestCount).toBe(1);
   });
 
   it("does not crash the page when an individual query fails", async () => {
@@ -209,6 +219,56 @@ describe("DashboardPage", () => {
     const countAfterDeadline = statisticsRequestCount;
     await vi.advanceTimersByTimeAsync(5_000);
     expect(statisticsRequestCount).toBe(countAfterDeadline);
+  });
+
+  it("starts the 20s statistics budget when the query is actually enabled, not at component mount", async () => {
+    vi.useFakeTimers();
+    let statisticsRequestCount = 0;
+    server.use(
+      plansHandler([]),
+      streakHandler(0),
+      http.get("/api/v1/checkins", async ({ request }) => {
+        // Simulate a slow history request: the statistics query must stay
+        // disabled (and its 20s budget unstarted) for this entire delay.
+        await delay(5_000);
+        const url = new URL(request.url);
+        const page = Number(url.searchParams.get("page") ?? "1");
+        const pageSize = Number(url.searchParams.get("page_size") ?? "5");
+        return HttpResponse.json({
+          checkins: [makeCheckin({ id: "c1" })],
+          page: { page, page_size: pageSize, total: 1 },
+          streak: 999
+        });
+      }),
+      metricsHandler([]),
+      http.get("/api/v1/statistics/summary", () => {
+        statisticsRequestCount += 1;
+        return HttpResponse.json({
+          summary: { user_id: "u1", period: 1, start: "2026-08-05", end: "2026-08-11", workout_count: 0, active_days: 0, total_duration_seconds: 0 }
+        });
+      })
+    );
+    renderDashboard();
+
+    // While history is still in flight (first 5s), statistics must not be requested at all.
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(statisticsRequestCount).toBe(0);
+    expect(screen.queryByRole("button", { name: "重新获取统计" })).not.toBeInTheDocument();
+
+    // History resolves around t=5s (mount-relative); give a little buffer for
+    // the delay + response processing to settle before asserting enablement.
+    await vi.advanceTimersByTimeAsync(2_000); // t≈6s since mount
+    expect(statisticsRequestCount).toBeGreaterThan(0);
+
+    // t≈21s since mount = ~15s since the query was actually enabled (~6s).
+    // A mount-anchored deadline (the bug) would already have expired well
+    // before this point (mount+20s); an enablement-anchored deadline must not.
+    await vi.advanceTimersByTimeAsync(15_000); // t≈21s since mount
+    expect(screen.queryByRole("button", { name: "重新获取统计" })).not.toBeInTheDocument();
+
+    // t≈27s since mount = ~21s since enablement: the budget should now be exhausted.
+    await vi.advanceTimersByTimeAsync(6_000); // t≈27s since mount
+    expect(screen.getByRole("button", { name: "重新获取统计" })).toBeInTheDocument();
   });
 
   it("stops polling once statistics catches up to the checkin total", async () => {

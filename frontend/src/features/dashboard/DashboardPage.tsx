@@ -17,6 +17,55 @@ function weekRange(now: Date = new Date()): { from: string; to: string } {
   return { from: formatLocalDate(subtractLocalDays(now, 6)), to: todayLocalDate(now) };
 }
 
+/**
+ * Renders the weekly statistics summary and manages its own bounded polling
+ * budget. Mounted by `DashboardPage` only once `historyQuery` has
+ * succeeded, so the lazy `useState` initializer below captures "now" at the
+ * exact moment the query becomes enabled, not at `DashboardPage` mount
+ * time. The caller also remounts this component (via `key={expectedTotal}`)
+ * whenever the target checkin count changes, so a new target starts with
+ * its own full 20s budget instead of inheriting a stale deadline.
+ */
+function WeeklyStatisticsCard(props: { expectedTotal: number }) {
+  const { expectedTotal } = props;
+  const [deadline, setDeadline] = useState(() => Date.now() + STATISTICS_POLL_BUDGET_MS);
+  const [deadlinePassed, setDeadlinePassed] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDeadlinePassed(true);
+    }, Math.max(0, deadline - Date.now()));
+    return () => clearTimeout(timer);
+  }, [deadline]);
+
+  const statisticsQuery = useWeeklyStatisticsQuery({ deadline, targetCheckinCount: expectedTotal });
+
+  function handleRetry() {
+    setDeadlinePassed(false);
+    setDeadline(Date.now() + STATISTICS_POLL_BUDGET_MS);
+    void statisticsQuery.refetch();
+  }
+
+  const summary = statisticsQuery.data;
+  const caughtUp = summary ? summary.workout_count >= expectedTotal : false;
+  const showRetry = !statisticsQuery.isFetching && (statisticsQuery.isError || (deadlinePassed && !caughtUp));
+  const errorMessage =
+    statisticsQuery.error instanceof ApiError ? statisticsQuery.error.body.message : "加载本周统计失败";
+
+  return (
+    <>
+      {statisticsQuery.isLoading ? <p role="status">统计加载中…</p> : null}
+      {statisticsQuery.isError ? <Feedback tone="error" message={errorMessage} /> : null}
+      {summary ? (
+        <p>
+          本周训练 {summary.workout_count} 次，活跃 {summary.active_days} 天
+        </p>
+      ) : null}
+      {showRetry ? <Button onClick={handleRetry}>重新获取统计</Button> : null}
+    </>
+  );
+}
+
 export function DashboardPage() {
   const [range] = useState(() => weekRange());
   const todayDate = todayLocalDate();
@@ -39,39 +88,8 @@ export function DashboardPage() {
   });
   const metricsQuery = useMetricsQuery();
 
-  // The polling budget starts counting from the initial mount rather than
-  // waiting for `historyQuery` to succeed: the query stays disabled until
-  // then anyway (see `enabled` below), and in practice that gap is tiny
-  // relative to the 20s budget, so this keeps the deadline as plain,
-  // effect-free state.
-  const [statisticsDeadline, setStatisticsDeadline] = useState(() => Date.now() + STATISTICS_POLL_BUDGET_MS);
-  const [deadlinePassed, setDeadlinePassed] = useState(false);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDeadlinePassed(true);
-    }, Math.max(0, statisticsDeadline - Date.now()));
-    return () => clearTimeout(timer);
-  }, [statisticsDeadline]);
-
   const targetCheckinCount = historyQuery.data?.page?.total ?? 0;
   const recentCheckins = historyQuery.data?.checkins ?? [];
-  const statisticsQuery = useWeeklyStatisticsQuery({
-    enabled: historyQuery.isSuccess,
-    deadline: statisticsDeadline,
-    targetCheckinCount
-  });
-
-  function handleRetryStatistics() {
-    setDeadlinePassed(false);
-    setStatisticsDeadline(Date.now() + STATISTICS_POLL_BUDGET_MS);
-    void statisticsQuery.refetch();
-  }
-
-  const summary = statisticsQuery.data;
-  const caughtUp = summary ? summary.workout_count >= targetCheckinCount : false;
-  const showStatisticsRetry =
-    !statisticsQuery.isFetching && (statisticsQuery.isError || (deadlinePassed && !caughtUp));
 
   const metrics = metricsQuery.data?.metrics ?? [];
   const latestWeight = latestMetric(metrics, "weight");
@@ -88,8 +106,6 @@ export function DashboardPage() {
     historyQuery.error instanceof ApiError ? historyQuery.error.body.message : "加载打卡记录失败";
   const metricsErrorMessage =
     metricsQuery.error instanceof ApiError ? metricsQuery.error.body.message : "加载身体数据失败";
-  const statisticsErrorMessage =
-    statisticsQuery.error instanceof ApiError ? statisticsQuery.error.body.message : "加载本周统计失败";
 
   return (
     <section className={styles.page}>
@@ -166,14 +182,10 @@ export function DashboardPage() {
             <Button onClick={() => void historyQuery.refetch()}>重试</Button>
           </div>
         ) : null}
-        {statisticsQuery.isLoading ? <p role="status">统计加载中…</p> : null}
-        {statisticsQuery.isError ? <Feedback tone="error" message={statisticsErrorMessage} /> : null}
-        {summary ? (
-          <p>
-            本周训练 {summary.workout_count} 次，活跃 {summary.active_days} 天
-          </p>
+        {historyQuery.isLoading ? <p role="status">统计加载中…</p> : null}
+        {historyQuery.isSuccess ? (
+          <WeeklyStatisticsCard key={targetCheckinCount} expectedTotal={targetCheckinCount} />
         ) : null}
-        {showStatisticsRetry ? <Button onClick={handleRetryStatistics}>重新获取统计</Button> : null}
       </Card>
 
       <Card title="身体数据">

@@ -12,12 +12,8 @@ export const STATISTICS_POLL_BUDGET_MS = 20_000;
  * whichever happens first. `refetchInterval` returns `false` once either
  * condition is met so TanStack Query stops scheduling further requests.
  */
-export function useWeeklyStatisticsQuery(params: {
-  enabled: boolean;
-  deadline: number;
-  targetCheckinCount: number;
-}) {
-  const { enabled, deadline, targetCheckinCount } = params;
+export function useWeeklyStatisticsQuery(params: { deadline: number; targetCheckinCount: number }) {
+  const { deadline, targetCheckinCount } = params;
 
   return useQuery<Summary>({
     queryKey: ["statistics", "summary", "week"],
@@ -28,7 +24,6 @@ export function useWeeklyStatisticsQuery(params: {
       }
       return summary;
     },
-    enabled,
     retry: false,
     refetchInterval: (query) => {
       if (query.state.status === "error") return false;

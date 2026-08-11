@@ -200,6 +200,39 @@ describe("BodyMetricsPage", () => {
     expect(captured.keys[1]).not.toBe(firstKey);
   });
 
+  it("uses a new idempotency key for a repeat submission with an identical value after a success", async () => {
+    const captured: { keys: string[]; bodies: MetricBody[] } = { keys: [], bodies: [] };
+    server.use(
+      metricsListHandler([]),
+      http.post("/api/v1/body-metrics", async ({ request }) => {
+        const body = (await request.json()) as MetricBody;
+        captured.keys.push(request.headers.get("Idempotency-Key") ?? "");
+        captured.bodies.push(body);
+        return HttpResponse.json(
+          { metric: { id: `m${captured.keys.length}`, metric_type: body.metric_type, value: body.value, unit: body.unit, recorded_at: body.recorded_at } },
+          { status: 201 }
+        );
+      })
+    );
+    renderBodyMetrics();
+
+    const input = screen.getByLabelText("体重");
+    await user.type(input, "70");
+    await user.click(screen.getByRole("button", { name: "保存体重" }));
+    await screen.findByText(/保存成功/);
+    const firstKey = captured.keys[0];
+
+    // Same numeric value re-entered after a successful submission: this is a
+    // brand-new attempt (e.g. a second weigh-in that happens to match), not a
+    // retry of the first, so it must not reuse the first attempt's key.
+    await user.type(input, "70");
+    await user.click(screen.getByRole("button", { name: "保存体重" }));
+    await waitFor(() => expect(captured.keys).toHaveLength(2));
+
+    expect(captured.bodies[0].value).toBe(captured.bodies[1].value);
+    expect(captured.keys[1]).not.toBe(firstKey);
+  });
+
   it("disables the submit button while pending to prevent duplicate submits", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
