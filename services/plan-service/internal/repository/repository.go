@@ -45,7 +45,14 @@ func (r GORM) CreatePlan(c context.Context, p *model.Plan) error {
 	if p.IdempotencyKey == "" {
 		return r.DB.WithContext(c).Table(table(r.Schema, "plans")).Create(p).Error
 	}
-	result := r.DB.WithContext(c).Table(table(r.Schema, "plans")).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "idempotency_key"}}, DoNothing: true, TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}}}).Create(p)
+	// TargetWhere must use a literal SQL expression, not a bound parameter
+	// (clause.Neq binds "" as $N): PostgreSQL only re-resolves a prepared
+	// statement's ON CONFLICT arbiter against a partial index for its first 5
+	// executions ("custom plan"); from the 6th execution on it reuses a
+	// "generic plan" that can't infer the arbiter from a parameterized
+	// predicate and fails with SQLSTATE 42P10. See CreateWithEvent in
+	// checkin-service's repository for the same pattern.
+	result := r.DB.WithContext(c).Table(table(r.Schema, "plans")).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "idempotency_key"}}, DoNothing: true, TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "idempotency_key <> ''"}}}}).Create(p)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -89,7 +96,8 @@ func (r GORM) CreateDay(c context.Context, d *model.WorkoutDay) error {
 	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_days")).Clauses(clause.OnConflict{
 		Columns:     []clause.Column{{Name: "user_id"}, {Name: "plan_id"}, {Name: "idempotency_key"}},
 		DoNothing:   true,
-		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
+		// See the literal-vs-parameter comment in CreatePlan above.
+		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "idempotency_key <> ''"}}},
 	}).Create(d)
 	if result.Error != nil {
 		return result.Error
@@ -138,7 +146,8 @@ func (r GORM) CreateItem(c context.Context, i *model.WorkoutItem) error {
 	result := r.DB.WithContext(c).Table(table(r.Schema, "workout_items")).Clauses(clause.OnConflict{
 		Columns:     []clause.Column{{Name: "user_id"}, {Name: "workout_day_id"}, {Name: "idempotency_key"}},
 		DoNothing:   true,
-		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Neq{Column: "idempotency_key", Value: ""}}},
+		// See the literal-vs-parameter comment in CreatePlan above.
+		TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "idempotency_key <> ''"}}},
 	}).Create(i)
 	if result.Error != nil {
 		return result.Error

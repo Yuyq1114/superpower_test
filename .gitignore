@@ -11,3 +11,8 @@
 !.env.example
 
 deploy/k8s/dev/secret.env
+
+frontend/node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/

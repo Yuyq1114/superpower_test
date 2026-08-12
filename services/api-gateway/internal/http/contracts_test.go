@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	authv1 "github.com/example/fitness-checkin/proto/gen/auth/v1"
 	checkinv1 "github.com/example/fitness-checkin/proto/gen/checkin/v1"
 	planv1 "github.com/example/fitness-checkin/proto/gen/plan/v1"
@@ -22,11 +23,21 @@ import (
 
 type authStub struct {
 	authv1.AuthServiceClient
-	login func(context.Context, *authv1.LoginRequest) (*authv1.AuthResponse, error)
+	login   func(context.Context, *authv1.LoginRequest) (*authv1.AuthResponse, error)
+	refresh func(context.Context, *authv1.RefreshRequest) (*authv1.RefreshResponse, error)
+	logout  func(context.Context, *authv1.LogoutRequest) (*authv1.Empty, error)
 }
 
 func (s authStub) Login(c context.Context, r *authv1.LoginRequest, _ ...grpc.CallOption) (*authv1.AuthResponse, error) {
 	return s.login(c, r)
+}
+
+func (s authStub) Refresh(c context.Context, r *authv1.RefreshRequest, _ ...grpc.CallOption) (*authv1.RefreshResponse, error) {
+	return s.refresh(c, r)
+}
+
+func (s authStub) Logout(c context.Context, r *authv1.LogoutRequest, _ ...grpc.CallOption) (*authv1.Empty, error) {
+	return s.logout(c, r)
 }
 
 type planStub struct {
@@ -195,4 +206,211 @@ func TestStatisticsDefaultsWeekAndMapsSafeError(t *testing.T) {
 func TestResponseJSONCanDecode(t *testing.T) {
 	var v map[string]any
 	_ = json.Unmarshal([]byte(`{"ok":true}`), &v)
+}
+
+func TestLoginSetsRefreshCookieAndOmitsRefreshTokenFromBody(t *testing.T) {
+	cfg := RefreshCookieConfig{Name: "fitness_refresh"}
+	a := authStub{login: func(context.Context, *authv1.LoginRequest) (*authv1.AuthResponse, error) {
+		return &authv1.AuthResponse{Tokens: &authv1.TokenPair{
+			AccessToken: "access", RefreshToken: "refresh", RefreshExpiresIn: 3600,
+		}}, nil
+	}}
+	w := call(t, NewRouter(&Dependencies{Auth: a, Cookie: cfg}), "POST", "/api/v1/auth/login", `{"email":"a@b.com","password":"ValidPass123"}`, false)
+	if w.Code != nethttp.StatusOK || strings.Contains(w.Body.String(), "refresh_token") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	cookie := w.Result().Cookies()[0]
+	if cookie.Name != "fitness_refresh" || cookie.Value != "refresh" || !cookie.HttpOnly || cookie.SameSite != nethttp.SameSiteStrictMode {
+		t.Fatalf("cookie=%#v", cookie)
+	}
+}
+
+func TestRefreshReadsCookieRotatesAndUpdatesCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	a := authStub{refresh: func(_ context.Context, request *authv1.RefreshRequest) (*authv1.RefreshResponse, error) {
+		if request.RefreshToken != "old" {
+			t.Fatalf("refresh token=%q", request.RefreshToken)
+		}
+		return &authv1.RefreshResponse{Tokens: &authv1.TokenPair{
+			AccessToken: "access-2", RefreshToken: "new", RefreshExpiresIn: 3600,
+		}}, nil
+	}}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/refresh", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "old"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Auth: a, Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusOK || strings.Contains(w.Body.String(), "refresh_token") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Result().Cookies()[0].Value; got != "new" {
+		t.Fatalf("rotated cookie=%q", got)
+	}
+}
+
+func TestLogoutClearsCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	a := authStub{logout: func(_ context.Context, request *authv1.LogoutRequest) (*authv1.Empty, error) {
+		if request.RefreshToken != "refresh" {
+			t.Fatalf("refresh token=%q", request.RefreshToken)
+		}
+		return &authv1.Empty{}, nil
+	}}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Authorization", "Bearer "+token(t, "secret", time.Now().Add(time.Hour)))
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "refresh"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Auth: a, JWTSecret: "secret", Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusNoContent || w.Result().Cookies()[0].MaxAge >= 0 {
+		t.Fatalf("status=%d cookies=%#v", w.Code, w.Result().Cookies())
+	}
+}
+
+func TestRefreshRejectsMissingOrigin(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/refresh", nil)
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "old"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatalf("unexpected cookie set: %#v", w.Result().Cookies())
+	}
+}
+
+func TestRefreshRejectsDisallowedOrigin(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/refresh", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "old"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatalf("unexpected cookie set: %#v", w.Result().Cookies())
+	}
+}
+
+func TestRefreshRejectsMissingCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/refresh", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestLogoutRejectsMissingOrigin(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token(t, "secret", time.Now().Add(time.Hour)))
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "refresh"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{JWTSecret: "secret", Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatalf("unexpected cookie set: %#v", w.Result().Cookies())
+	}
+}
+
+func TestLogoutRejectsDisallowedOrigin(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Authorization", "Bearer "+token(t, "secret", time.Now().Add(time.Hour)))
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "refresh"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{JWTSecret: "secret", Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestLogoutRejectsMissingCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Authorization", "Bearer "+token(t, "secret", time.Now().Add(time.Hour)))
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{JWTSecret: "secret", Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code != nethttp.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestRefreshUpstreamFailureDoesNotRotateCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	a := authStub{refresh: func(context.Context, *authv1.RefreshRequest) (*authv1.RefreshResponse, error) {
+		return nil, errors.New("upstream unavailable")
+	}}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/refresh", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "old"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Auth: a, Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code == nethttp.StatusOK {
+		t.Fatalf("expected failure status, got %d body=%s", w.Code, w.Body.String())
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Fatalf("cookie must not be set/rotated on failed refresh: %#v", w.Result().Cookies())
+	}
+}
+
+func TestLogoutUpstreamFailureStillClearsCookie(t *testing.T) {
+	cfg := RefreshCookieConfig{
+		Name:           "fitness_refresh",
+		AllowedOrigins: map[string]struct{}{"http://localhost:5173": {}},
+	}
+	a := authStub{logout: func(context.Context, *authv1.LogoutRequest) (*authv1.Empty, error) {
+		return nil, errors.New("upstream unavailable")
+	}}
+	req := httptest.NewRequest(nethttp.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Authorization", "Bearer "+token(t, "secret", time.Now().Add(time.Hour)))
+	req.AddCookie(&nethttp.Cookie{Name: "fitness_refresh", Value: "refresh"})
+	w := httptest.NewRecorder()
+	NewRouter(&Dependencies{Auth: a, JWTSecret: "secret", Cookie: cfg}).ServeHTTP(w, req)
+	if w.Code == nethttp.StatusNoContent {
+		t.Fatalf("expected failure status, got %d", w.Code)
+	}
+	cookies := w.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].MaxAge >= 0 {
+		t.Fatalf("expected refresh cookie to still be cleared on upstream failure: %#v", cookies)
+	}
 }

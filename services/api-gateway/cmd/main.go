@@ -14,14 +14,17 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
 
 type gatewayConfig struct {
-	Port      int
-	Secret    string
-	Addresses map[string]string
+	Port           int
+	Secret         string
+	Addresses      map[string]string
+	AllowedOrigins map[string]struct{}
+	CookieSecure   bool
 }
 
 func load() (gatewayConfig, error) {
@@ -34,7 +37,29 @@ func load() (gatewayConfig, error) {
 		p = 8080
 	}
 	a := map[string]string{"auth": env("AUTH_GRPC_ADDR", "localhost:9091"), "plan": env("PLAN_GRPC_ADDR", "localhost:9092"), "checkin": env("CHECKIN_GRPC_ADDR", "localhost:9093"), "profile": env("PROFILE_GRPC_ADDR", "localhost:9094"), "statistics": env("STATISTICS_GRPC_ADDR", "localhost:9095")}
-	return gatewayConfig{p, secret, a}, nil
+	origins, e := allowedOrigins(os.Getenv("ALLOWED_ORIGINS"))
+	if e != nil {
+		return gatewayConfig{}, e
+	}
+	secure, e := strconv.ParseBool(env("REFRESH_COOKIE_SECURE", "false"))
+	if e != nil {
+		return gatewayConfig{}, fmt.Errorf("REFRESH_COOKIE_SECURE: %w", e)
+	}
+	return gatewayConfig{p, secret, a, origins, secure}, nil
+}
+func allowedOrigins(raw string) (map[string]struct{}, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("ALLOWED_ORIGINS is required")
+	}
+	origins := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			return nil, fmt.Errorf("ALLOWED_ORIGINS contains an empty entry")
+		}
+		origins[origin] = struct{}{}
+	}
+	return origins, nil
 }
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
@@ -48,8 +73,8 @@ func main() {
 		os.Exit(1)
 	}
 }
-func productionDependencies(cs *gatewayclients.Clients, secret string, logger *slog.Logger) *gatewayhttp.Dependencies {
-	return &gatewayhttp.Dependencies{Clients: cs, JWTSecret: secret, Logger: logger, Ready: cs.Ready}
+func productionDependencies(cs *gatewayclients.Clients, secret string, logger *slog.Logger, cookie gatewayhttp.RefreshCookieConfig) *gatewayhttp.Dependencies {
+	return &gatewayhttp.Dependencies{Clients: cs, JWTSecret: secret, Logger: logger, Ready: cs.Ready, Cookie: cookie}
 }
 func run() error {
 	logger := observability.NewLogger("api-gateway", nil)
@@ -68,7 +93,8 @@ func run() error {
 	}
 	defer cs.Close()
 	reg := observability.NewRegistry()
-	router := gatewayhttp.NewRouterWithMetrics(productionDependencies(cs, cfg.Secret, logger), observability.NewMetrics(reg))
+	cookie := gatewayhttp.RefreshCookieConfig{Secure: cfg.CookieSecure, AllowedOrigins: cfg.AllowedOrigins}
+	router := gatewayhttp.NewRouterWithMetrics(productionDependencies(cs, cfg.Secret, logger, cookie), observability.NewMetrics(reg))
 	router.GET("/metrics", func(c *gin.Context) { promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(c.Writer, c.Request) })
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Port), Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	fail := make(chan error, 1)

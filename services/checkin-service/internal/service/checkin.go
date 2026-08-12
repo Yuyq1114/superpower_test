@@ -34,6 +34,10 @@ func fingerprint(item string, date time.Time, note string) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%s", item, date.Format("2006-01-02"), note)))
 	return hex.EncodeToString(sum[:])
 }
+func dayStartUTC(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
 func valid(n, v string) error {
 	if strings.TrimSpace(v) == "" {
 		return apperror.InvalidArgument(n + " is required")
@@ -55,6 +59,14 @@ func (s *Service) Complete(ctx context.Context, u, i string, d time.Time, note, 
 	}
 	d = d.UTC()
 	d = time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
+	// `d` is the caller's own local calendar day, so a client east of UTC
+	// legitimately reports a day that is still "tomorrow" in UTC. One day of
+	// slack covers every real timezone; anything beyond that is a client
+	// bypassing the form's `max` attribute to pre-fill a future statistics
+	// bucket.
+	if d.After(dayStartUTC(time.Now()).AddDate(0, 0, 1)) {
+		return model.Checkin{}, apperror.InvalidArgument("date must not be in the future")
+	}
 	if s.checker != nil {
 		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -64,7 +76,14 @@ func (s *Service) Complete(ctx context.Context, u, i string, d time.Time, note, 
 	}
 	now := time.Now().UTC()
 	c := model.Checkin{ID: uuid.NewString(), UserID: u, WorkoutItemID: i, IdempotencyKey: key, RequestFingerprint: fingerprint(i, d, note), Date: d, Note: note, CompletedAt: now, CreatedAt: now}
-	ev := model.OutboxEvent{EventID: uuid.NewString(), EventType: "WorkoutCompleted", UserID: u, CheckinID: c.ID, CompletedAt: now, OccurredAt: now}
+	// WorkoutCompleted v1 contract: `completed_at` is the LOGICAL workout
+	// date (UTC midnight of `c.Date`), not the moment the row was written --
+	// statistics buckets weekly/monthly summaries and active days directly
+	// off this field, so a check-in backfilled today for last week lands in last
+	// week's bucket. `occurred_at` is the write instant, and the check-in
+	// row's own `completed_at` keeps the real completion timestamp for the
+	// user-facing history. Do not "fix" this to `now`.
+	ev := model.OutboxEvent{EventID: uuid.NewString(), EventType: "WorkoutCompleted", UserID: u, CheckinID: c.ID, CompletedAt: c.Date, OccurredAt: now}
 	if e := s.repo.CreateWithEvent(ctx, &c, &ev); e != nil {
 		return model.Checkin{}, e
 	}
@@ -89,7 +108,11 @@ func (s *Service) ListHistory(ctx context.Context, u string, from, to time.Time,
 	if e != nil {
 		return Page[model.Checkin]{}, e
 	}
-	result.Streak = CurrentStreak(dates, time.Now().UTC())
+	// `to` is the caller's own local notion of "today" (validated non-zero
+	// above); using the server's own wall clock here instead would silently
+	// disagree with it for roughly half of each day for any caller whose
+	// timezone isn't UTC, truncating a real streak to 0.
+	result.Streak = CurrentStreak(dates, to.UTC())
 	return result, nil
 }
 func CurrentStreak(ds []time.Time, now time.Time) int {
@@ -109,4 +132,3 @@ func CurrentStreak(ds []time.Time, now time.Time) int {
 	}
 	return n
 }
-func CalculateStreak(ds []time.Time) int { return CurrentStreak(ds, time.Now().UTC()) }

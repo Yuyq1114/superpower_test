@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"github.com/alicebob/miniredis/v2"
+	"github.com/example/fitness-checkin/pkg/workoutevent"
 	"github.com/example/fitness-checkin/services/checkin-service/internal/model"
 	"github.com/redis/go-redis/v9"
 	"testing"
@@ -43,6 +44,43 @@ func TestPublisher(t *testing.T) {
 	}
 	if r.published != 1 {
 		t.Fatal(r.published)
+	}
+}
+
+// The v1 wire format is unchanged by the logical-date semantics: both
+// timestamps are still RFC3339, so events already sitting unpublished in the
+// outbox stay parseable by the statistics consumer. Only the MEANING of
+// `completed_at` changed (logical workout date instead of write instant).
+func TestPublishedEventKeepsRFC3339TimestampsForLogicalDates(t *testing.T) {
+	m := miniredis.RunT(t)
+	c := redis.NewClient(&redis.Options{Addr: m.Addr()})
+	logicalDate := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	writtenAt := time.Date(2026, 8, 11, 9, 30, 15, 0, time.UTC)
+	r := &repo{events: []model.OutboxEvent{{EventID: "e-logical", EventType: "WorkoutCompleted", UserID: "u", CheckinID: "c", CompletedAt: logicalDate, OccurredAt: writtenAt}}}
+
+	if err := (&Publisher{Repo: r, Redis: c}).PublishPending(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := c.XRange(context.Background(), Stream, "-", "+").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("published %d messages, want 1", len(messages))
+	}
+	event, err := workoutevent.Parse(messages[0].Values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.CompletedAt != "2026-08-05T00:00:00Z" {
+		t.Fatalf("completed_at=%q, want the logical workout date at UTC midnight", event.CompletedAt)
+	}
+	if event.OccurredAt != "2026-08-11T09:30:15Z" {
+		t.Fatalf("occurred_at=%q, want the write instant", event.OccurredAt)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, event.CompletedAt); err != nil {
+		t.Fatalf("completed_at must stay RFC3339 for already-queued events: %v", err)
 	}
 }
 

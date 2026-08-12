@@ -114,13 +114,20 @@ services:
       CHECKIN_GRPC_ADDR: checkin-service:9090
       PROFILE_GRPC_ADDR: profile-service:9090
       STATISTICS_GRPC_ADDR: statistics-service:9090
-    ports: ["127.0.0.1:${GATEWAY_PORT:-8080}:8080"]
+      ALLOWED_ORIGINS: http://127.0.0.1:${FRONTEND_PORT:-8088},http://localhost:${FRONTEND_PORT:-8088}
+      REFRESH_COOKIE_SECURE: "false"
+    expose: ["8080"]
     depends_on:
       auth-service: {condition: service_started}
       plan-service: {condition: service_started}
       checkin-service: {condition: service_started}
       profile-service: {condition: service_started}
       statistics-service: {condition: service_started}
+  frontend:
+    build: {context: ../frontend, dockerfile: Dockerfile}
+    ports: ["127.0.0.1:${FRONTEND_PORT:-8088}:8080"]
+    depends_on:
+      api-gateway: {condition: service_started}
 volumes:
   postgres-data:
   redis-data:

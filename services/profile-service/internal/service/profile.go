@@ -75,7 +75,13 @@ func (s *Service) ListMetrics(ctx context.Context, u, t string, from, to time.Ti
 		from = time.Unix(0, 0)
 	}
 	if to.IsZero() {
-		to = time.Now()
+		// Symmetric with the lower bound defaulting to the Unix epoch: an
+		// unspecified upper bound means "unbounded", not "this process's
+		// clock right now". Defaulting to time.Now() would race against
+		// ordinary clock skew between the caller (e.g. a browser) and this
+		// service, silently dropping a just-recorded metric whose
+		// recorded_at is a few seconds ahead of this process's own clock.
+		to = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 	}
 	return s.repo.List(ctx, u, t, from.UTC(), to.UTC())
 }

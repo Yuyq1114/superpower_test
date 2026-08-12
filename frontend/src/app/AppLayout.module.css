@@ -1,0 +1,190 @@
+.appShell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+}
+
+.skipLink {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 8px;
+}
+
+.skipLink:focus {
+  left: var(--space-4);
+  top: var(--space-4);
+}
+
+/*
+ * Deliberately NOT `position: fixed`/overlaying: a failed logout is real
+ * feedback the user needs to read and act on, but it must never block the
+ * top of the page or force itself over content the user was already
+ * looking at. Rendering it in normal flow at the top of `.main` (rather
+ * than in `.sidebar`, where it would either overflow the single-row mobile
+ * bottom bar or force it onto a second row) keeps it visible without ever
+ * fighting the layout of either region.
+ */
+.logoutError {
+  background: var(--color-surface);
+  border: 1px solid var(--color-danger);
+  border-radius: 8px;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.logoutErrorHint {
+  color: var(--color-muted);
+  font-size: 0.875rem;
+}
+
+.sidebar {
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+}
+
+.nav {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-8);
+}
+
+.navLink {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  color: var(--color-text);
+}
+
+.navLink[aria-current="page"] {
+  background: var(--color-accent);
+  font-weight: 600;
+}
+
+.main {
+  padding: var(--space-8);
+}
+
+/*
+ * Mobile: the sidebar becomes a sticky bottom bar. The 5 nav links and the
+ * logout button must all render on a single row (never stacked), each
+ * meeting the 44x44px touch-target minimum. Compact gaps/padding/font-size
+ * keep 6 targets within a 390px-wide viewport; `env(safe-area-inset-bottom)`
+ * is added to the bar's own bottom padding for home-indicator devices.
+ */
+@media (max-width: 767px) {
+  /*
+   * A flex column (instead of `display: block`) lets `.sidebar` be visually
+   * last (`order: 2`, so it sticks to the bottom of the scrollport) while
+   * staying first in the DOM (so the skip link and keyboard/tab order still
+   * reach primary navigation before page content).
+   *
+   * `--bottom-nav-*` are the single source of truth for the bottom bar's
+   * size: `.sidebar`/`.navLink`/`.sidebar button` consume the building
+   * blocks directly (so they actually render at this size), and `.main`
+   * consumes the derived `--bottom-nav-height` to reserve exactly that much
+   * space. Changing the touch target or padding here automatically keeps
+   * both sides in sync instead of requiring a second hand-maintained
+   * `calc()` to be updated in lockstep.
+   */
+  .appShell {
+    display: flex;
+    flex-direction: column;
+    --bottom-nav-touch-target: 44px;
+    --bottom-nav-padding-block: var(--space-2);
+    --bottom-nav-border: 1px;
+    --bottom-nav-height: calc(
+      var(--bottom-nav-touch-target) + var(--bottom-nav-padding-block) * 2 + var(--bottom-nav-border)
+    );
+  }
+
+  /*
+   * `position: sticky` (anchored within the normal document flow/scrollport)
+   * instead of `position: fixed` (anchored to the CSS layout viewport/ICB):
+   * both look identical in the common case, but a `fixed` bottom bar goes
+   * stale -- rendering below the visible screen -- whenever something
+   * changes the layout viewport's height without a matching resize event
+   * (e.g. mobile Chromium's native <select> popover, or a virtual keyboard
+   * under `interactive-widget=resizes-content`). `sticky` recomputes
+   * against the actual scrollport on every layout pass, so it can't drift
+   * out of sync the same way. No reserved `.appShell` padding-bottom is
+   * needed either: sticky content still occupies its own space in flow.
+   */
+  .sidebar {
+    order: 2;
+    position: sticky;
+    bottom: 0;
+    flex-shrink: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--bottom-nav-padding-block) var(--space-2)
+      calc(var(--bottom-nav-padding-block) + env(safe-area-inset-bottom));
+    border: 0;
+    border-top: var(--bottom-nav-border) solid var(--color-border);
+  }
+
+  .brand {
+    display: none;
+  }
+
+  .nav {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    margin: 0;
+    gap: var(--space-1);
+  }
+
+  .navLink {
+    flex: 0 1 auto;
+    min-width: var(--bottom-nav-touch-target);
+    min-height: var(--bottom-nav-touch-target);
+    padding: var(--space-1);
+    justify-content: center;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  /* `Button` sets padding/font-size inline, which otherwise wins over any
+     external stylesheet rule regardless of specificity; `!important` is the
+     only way to compact it for the bottom bar without touching the shared
+     component used everywhere else. */
+  .sidebar button {
+    flex: 0 0 auto;
+    min-width: var(--bottom-nav-touch-target);
+    min-height: var(--bottom-nav-touch-target);
+    padding: var(--space-1) var(--space-2) !important;
+    font-size: 0.75rem !important;
+    white-space: nowrap;
+  }
+
+  /*
+   * `position: sticky` keeps the bottom bar correctly anchored to the
+   * viewport, but (unlike a reserved layout region) doesn't stop `.main`'s
+   * own content from flowing underneath it -- the bar simply paints on top.
+   * Reserving `--bottom-nav-height` (derived from the same building blocks
+   * `.sidebar` actually renders with, see `.appShell` above) as `.main`'s
+   * padding-bottom keeps the document's actual last line of content above
+   * where the bar paints, the same way the old fixed-position layout
+   * reserved space via `.appShell`'s padding-bottom.
+   */
+  .main {
+    order: 1;
+    flex: 1 0 auto;
+    padding: var(--space-4) var(--space-4) calc(var(--space-4) + var(--bottom-nav-height) + env(safe-area-inset-bottom));
+  }
+}

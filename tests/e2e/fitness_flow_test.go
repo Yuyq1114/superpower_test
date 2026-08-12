@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	urlpkg "net/url"
 	"os"
 	"strings"
 	"testing"
@@ -20,6 +22,15 @@ import (
 type client struct {
 	baseURL, token string
 	http           *http.Client
+	lastBody       []byte
+}
+
+func newClient(base string) (*client, error) {
+	jar, e := cookiejar.New(nil)
+	if e != nil {
+		return nil, e
+	}
+	return &client{baseURL: base, http: &http.Client{Timeout: 5 * time.Second, Jar: jar}}, nil
 }
 type authResponse struct {
 	User struct {
@@ -68,9 +79,12 @@ type summaryResponse struct {
 func TestFitnessFlow(t *testing.T) {
 	base := strings.TrimRight(os.Getenv("BASE_URL"), "/")
 	if base == "" {
-		t.Fatal("BASE_URL is required for E2E tests; start the complete stack and run `BASE_URL=http://127.0.0.1:8080 make test-e2e`")
+		t.Fatal("BASE_URL is required for E2E tests; since Task 8, api-gateway no longer publishes a host port, so start the complete stack and run `BASE_URL=http://127.0.0.1:8088 make test-e2e` against the same-origin frontend entrypoint")
 	}
-	c := &client{baseURL: base, http: &http.Client{Timeout: 5 * time.Second}}
+	c, err := newClient(base)
+	if err != nil {
+		t.Fatalf("build HTTP client: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	if err := c.do(ctx, "GET", "/healthz", nil, "", 200, nil); err != nil {
@@ -83,10 +97,16 @@ func TestFitnessFlow(t *testing.T) {
 	if registered.User.ID == "" {
 		t.Fatal("empty registered user id")
 	}
+	if strings.Contains(string(c.lastBody), "refresh_token") {
+		t.Fatalf("register response leaked refresh_token: %s", c.lastBody)
+	}
 	must(t, c.do(ctx, "POST", "/api/v1/auth/login", map[string]any{"email": email, "password": password}, "", 200, &logged))
 	c.token = logged.Tokens.AccessToken
 	if c.token == "" {
 		t.Fatal("empty login access token")
+	}
+	if strings.Contains(string(c.lastBody), "refresh_token") {
+		t.Fatalf("login response leaked refresh_token: %s", c.lastBody)
 	}
 	var plan planResponse
 	must(t, c.do(ctx, "POST", "/api/v1/plans", map[string]any{"name": "E2E strength plan"}, "plan-"+suffix, 201, &plan))
@@ -153,6 +173,79 @@ func TestFitnessFlow(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 }
+func TestRefreshCookieRotationAndLogout(t *testing.T) {
+	base := strings.TrimRight(os.Getenv("BASE_URL"), "/")
+	if base == "" {
+		t.Fatal("BASE_URL is required for E2E tests; since Task 8, api-gateway no longer publishes a host port, so start the complete stack and run `BASE_URL=http://127.0.0.1:8088 make test-e2e` against the same-origin frontend entrypoint")
+	}
+	c, err := newClient(base)
+	if err != nil {
+		t.Fatalf("build HTTP client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	suffix := uuid.NewString()
+	email, password := "e2e-refresh-"+suffix+"@example.test", "E2e-password-123!"
+	var logged authResponse
+	must(t, c.do(ctx, "POST", "/api/v1/auth/register", map[string]any{"email": email, "password": password}, "", 201, nil))
+	must(t, c.do(ctx, "POST", "/api/v1/auth/login", map[string]any{"email": email, "password": password}, "", 200, &logged))
+	c.token = logged.Tokens.AccessToken
+	if c.token == "" {
+		t.Fatal("empty login access token")
+	}
+	// The refresh cookie is scoped to Path=/api/v1/auth (never sent on other
+	// routes), so it must be queried under that path: Go's cookiejar only
+	// returns a cookie for a URL whose path the cookie's Path is a prefix
+	// of, and the bare base URL's path ("/") doesn't qualify.
+	loginCookies := c.http.Jar.Cookies(mustURL(t, base+"/api/v1/auth"))
+	if !hasCookie(loginCookies, "fitness_refresh") {
+		t.Fatal("login response did not set fitness_refresh cookie")
+	}
+
+	var refreshed authResponse
+	must(t, c.do(ctx, "POST", "/api/v1/auth/refresh", nil, "", 200, &refreshed))
+	if strings.Contains(string(c.lastBody), "refresh_token") {
+		t.Fatalf("refresh response leaked refresh_token: %s", c.lastBody)
+	}
+	if refreshed.Tokens.AccessToken == "" || refreshed.Tokens.AccessToken == c.token {
+		t.Fatalf("refresh did not rotate access token: %s", c.lastBody)
+	}
+	c.token = refreshed.Tokens.AccessToken
+
+	rotatedCookies := c.http.Jar.Cookies(mustURL(t, base+"/api/v1/auth"))
+	if !hasCookie(rotatedCookies, "fitness_refresh") {
+		t.Fatal("refresh response did not keep a fitness_refresh cookie")
+	}
+
+	if e := c.do(ctx, "POST", "/api/v1/auth/logout", nil, "", 204, nil); e != nil {
+		t.Fatalf("logout failed: %v", e)
+	}
+	postLogoutCookies := c.http.Jar.Cookies(mustURL(t, base+"/api/v1/auth"))
+	if hasCookie(postLogoutCookies, "fitness_refresh") {
+		t.Fatal("logout did not clear the fitness_refresh cookie")
+	}
+
+	if e := c.do(ctx, "POST", "/api/v1/auth/refresh", nil, "", 200, nil); e == nil {
+		t.Fatal("refresh succeeded after logout, expected the rotated cookie to be invalidated")
+	}
+}
+func hasCookie(cookies []*http.Cookie, name string) bool {
+	for _, ck := range cookies {
+		if ck.Name == name && ck.Value != "" {
+			return true
+		}
+	}
+	return false
+}
+func mustURL(t *testing.T, raw string) *urlpkg.URL {
+	t.Helper()
+	u, e := urlpkg.Parse(raw)
+	if e != nil {
+		t.Fatalf("parse BASE_URL: %v", e)
+	}
+	return u
+}
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -181,6 +274,7 @@ func (c *client) do(ctx context.Context, method, path string, body any, key stri
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
 	}
+	req.Header.Set("Origin", c.baseURL)
 	resp, e := c.http.Do(req)
 	if e != nil {
 		return fmt.Errorf("call %s %s: %w", method, path, e)
@@ -190,6 +284,7 @@ func (c *client) do(ctx context.Context, method, path string, body any, key stri
 	if e != nil {
 		return e
 	}
+	c.lastBody = data
 	if resp.StatusCode != want {
 		return fmt.Errorf("%s %s returned %d, want %d: %s", method, path, resp.StatusCode, want, strings.TrimSpace(string(data)))
 	}

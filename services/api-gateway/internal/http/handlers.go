@@ -35,6 +35,7 @@ type Dependencies struct {
 	JWTSecret  string
 	Logger     *slog.Logger
 	Ready      func(context.Context) error
+	Cookie     RefreshCookieConfig
 }
 type handler struct{ d *Dependencies }
 
@@ -190,6 +191,13 @@ func page(c *gin.Context) *planv1.PageRequest {
 }
 func key(c *gin.Context) string { return c.GetHeader("Idempotency-Key") }
 
+func (h *handler) issueRefreshCookie(c *gin.Context, tokens *authv1.TokenPair) {
+	if tokens == nil || tokens.RefreshToken == "" {
+		return
+	}
+	setRefreshCookie(c.Writer, h.d.Cookie, tokens.RefreshToken, tokens.RefreshExpiresIn)
+	tokens.RefreshToken = ""
+}
 func (h *handler) register(c *gin.Context) {
 	var r authv1.RegisterRequest
 	if e := bind(c, &r); e != nil {
@@ -203,6 +211,7 @@ func (h *handler) register(c *gin.Context) {
 		h.fail(c, e)
 		return
 	}
+	h.issueRefreshCookie(c, o.Tokens)
 	c.JSON(201, o)
 }
 func (h *handler) login(c *gin.Context) {
@@ -218,32 +227,43 @@ func (h *handler) login(c *gin.Context) {
 		h.fail(c, e)
 		return
 	}
+	h.issueRefreshCookie(c, o.Tokens)
 	c.JSON(200, o)
 }
 func (h *handler) refresh(c *gin.Context) {
-	var r authv1.RefreshRequest
-	if e := bind(c, &r); e != nil {
-		h.fail(c, e)
+	if e := requireAllowedOrigin(c.Request, h.d.Cookie); e != nil {
+		h.fail(c, apperror.Unauthenticated("origin is not allowed"))
+		return
+	}
+	rt, e := readRefreshCookie(c.Request, h.d.Cookie)
+	if e != nil {
+		h.fail(c, apperror.Unauthenticated("refresh cookie is required"))
 		return
 	}
 	ctx, x := h.publicContext(c)
 	defer x()
-	o, e := h.d.Auth.Refresh(ctx, &r)
+	o, e := h.d.Auth.Refresh(ctx, &authv1.RefreshRequest{RefreshToken: rt})
 	if e != nil {
 		h.fail(c, e)
 		return
 	}
+	h.issueRefreshCookie(c, o.Tokens)
 	c.JSON(200, o)
 }
 func (h *handler) logout(c *gin.Context) {
-	var r authv1.LogoutRequest
-	if e := bind(c, &r); e != nil {
-		h.fail(c, e)
+	if e := requireAllowedOrigin(c.Request, h.d.Cookie); e != nil {
+		h.fail(c, apperror.Unauthenticated("origin is not allowed"))
+		return
+	}
+	rt, e := readRefreshCookie(c.Request, h.d.Cookie)
+	if e != nil {
+		h.fail(c, apperror.Unauthenticated("refresh cookie is required"))
 		return
 	}
 	ctx, x := h.grpcContext(c)
 	defer x()
-	_, e := h.d.Auth.Logout(ctx, &r)
+	_, e = h.d.Auth.Logout(ctx, &authv1.LogoutRequest{RefreshToken: rt})
+	clearRefreshCookie(c.Writer, h.d.Cookie)
 	if e != nil {
 		h.fail(c, e)
 		return

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -100,7 +101,11 @@ func TestPostgresPGDataMigrationSmoke(t *testing.T) {
 		if err != nil || !info.IsDir() {
 			t.Fatal("empty volume did not get a pgdata directory")
 		}
-		if info.Mode().Perm() != 0700 {
+		// Only meaningful on a POSIX filesystem. On Windows (where an MSYS
+		// `sh` from Git can satisfy the checks above) chmod is a no-op and Go
+		// reports 0777 for every directory, so asserting the mode there would
+		// fail for the host rather than for the script.
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0700 {
 			t.Fatalf("pgdata permissions = %o, want 700", info.Mode().Perm())
 		}
 	})

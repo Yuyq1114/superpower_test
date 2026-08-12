@@ -9,7 +9,7 @@ import (
 )
 
 func TestDeploymentFilesExistAndContainNoBOM(t *testing.T) {
-	files := []string{"docker/Dockerfile", "postgres/init.sh", "postgres/init.sql", "k8s/base/kustomization.yaml", "k8s/base/namespace.yaml", "k8s/base/configmap.yaml", "k8s/base/secret.example.yaml", "k8s/base/postgres.yaml", "k8s/base/redis.yaml", "k8s/base/gateway.yaml", "k8s/base/services.yaml", "k8s/dev/kustomization.yaml", "k8s/dev/secret.env.example", "monitoring/prometheus.yaml", "monitoring/grafana.yaml"}
+	files := []string{"docker/Dockerfile", "postgres/init.sh", "postgres/init.sql", "k8s/base/kustomization.yaml", "k8s/base/namespace.yaml", "k8s/base/configmap.yaml", "k8s/base/secret.example.yaml", "k8s/base/postgres.yaml", "k8s/base/redis.yaml", "k8s/base/gateway.yaml", "k8s/base/frontend.yaml", "k8s/base/services.yaml", "k8s/dev/kustomization.yaml", "k8s/dev/secret.env.example", "monitoring/prometheus.yaml", "monitoring/grafana.yaml"}
 	for _, name := range files {
 		data, err := os.ReadFile(name)
 		if err != nil {
@@ -131,6 +131,209 @@ func TestComposePostgresCredentialsAreSharedWithServices(t *testing.T) {
 		if strings.Count(text, "${"+variable+":-") < 2 {
 			t.Errorf("docker-compose.yml must pass %s to postgres and owning service", variable)
 		}
+	}
+}
+
+func read(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestFrontendIsTheOnlyBrowserNodePort(t *testing.T) {
+	frontend := read(t, "k8s/base/frontend.yaml")
+	gateway := read(t, "k8s/base/gateway.yaml")
+	if !strings.Contains(frontend, "nodePort: 30080") {
+		t.Fatal("frontend must expose NodePort 30080")
+	}
+	if strings.Contains(gateway, "type: NodePort") || strings.Contains(gateway, "nodePort:") {
+		t.Fatal("gateway must remain internal")
+	}
+	if !strings.Contains(gateway, "type: ClusterIP") {
+		t.Fatal("gateway service must explicitly declare type: ClusterIP")
+	}
+}
+
+func TestFrontendDeploymentDeclaresOperationalSafety(t *testing.T) {
+	text := read(t, "k8s/base/frontend.yaml")
+	for _, required := range []string{
+		"startupProbe:", "readinessProbe:", "livenessProbe:", "resources:",
+		"runAsNonRoot: true", "readOnlyRootFilesystem: true",
+		"allowPrivilegeEscalation: false", "drop: [ALL]", "RuntimeDefault",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("missing %q", required)
+		}
+	}
+}
+
+// extractInlineMapping returns the body of a `<key>: { ... }` inline YAML
+// mapping, respecting nested braces, so a probe can be asserted on precisely
+// instead of via a substring search that any of the three probes could
+// satisfy.
+func extractInlineMapping(t *testing.T, text, key string) string {
+	t.Helper()
+	marker := key + ": {"
+	start := strings.Index(text, marker)
+	if start < 0 {
+		t.Fatalf("missing inline mapping for %q", key)
+	}
+	i := start + len(marker)
+	depth := 1
+	for depth > 0 {
+		if i >= len(text) {
+			t.Fatalf("unterminated inline mapping for %q", key)
+		}
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+		i++
+	}
+	return text[start+len(marker) : i-1]
+}
+
+// The frontend serves the SPA shell from its own container and only reverse
+// proxies /api/v1/* to the gateway. Wiring its readiness probe to the
+// gateway-dependent /api-readyz would take the frontend Pod out of the
+// NodePort's endpoint list whenever the gateway is degraded, so the browser
+// would get a connection failure instead of a rendered app that can surface
+// the API error itself. All three probes must therefore stay local.
+func TestFrontendProbesAreLocalAndNeverDependOnTheGateway(t *testing.T) {
+	text := read(t, "k8s/base/frontend.yaml")
+	for _, probe := range []string{"startupProbe", "readinessProbe", "livenessProbe"} {
+		body := extractInlineMapping(t, text, probe)
+		httpGet := extractInlineMapping(t, body, "httpGet")
+		if !strings.Contains(httpGet, "path: /healthz") {
+			t.Errorf("%s must probe the locally served path /healthz, got httpGet {%s}", probe, httpGet)
+		}
+		if !strings.Contains(httpGet, "port: http") {
+			t.Errorf("%s must probe the named container port http, got httpGet {%s}", probe, httpGet)
+		}
+		if strings.Contains(httpGet, "/api-readyz") || strings.Contains(httpGet, "/api-healthz") {
+			t.Errorf("%s must not depend on the api-gateway; got httpGet {%s}", probe, httpGet)
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if strings.Contains(line, "/api-readyz") || strings.Contains(line, "/api-healthz") {
+			t.Errorf("k8s/base/frontend.yaml must not wire any gateway-backed path into the manifest: %q", strings.TrimSpace(line))
+		}
+	}
+}
+
+// /api-readyz stays available as an operator diagnostics endpoint even though
+// no probe uses it any more.
+func TestFrontendKeepsGatewayDiagnosticsEndpoint(t *testing.T) {
+	conf := read(t, "../frontend/nginx/nginx.conf")
+	if !strings.Contains(conf, "location = /api-readyz") {
+		t.Fatal("nginx.conf must keep /api-readyz as a gateway readiness diagnostics endpoint")
+	}
+	if !strings.Contains(conf, "location = /api-healthz") {
+		t.Fatal("nginx.conf must keep /api-healthz as a gateway liveness diagnostics endpoint")
+	}
+}
+
+func TestFrontendDeploymentContract(t *testing.T) {
+	text := read(t, "k8s/base/frontend.yaml")
+	for _, required := range []string{
+		"image: fitness/frontend:dev",
+		"imagePullPolicy: IfNotPresent",
+		"containerPort: 8080",
+		"runAsUser: 101",
+		"runAsGroup: 101",
+		"requests: {cpu: 25m, memory: 32Mi}",
+		"limits: {cpu: 200m, memory: 128Mi}",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("k8s/base/frontend.yaml missing %q", required)
+		}
+	}
+	for _, mount := range []string{"mountPath: /tmp", "mountPath: /var/cache/nginx", "mountPath: /var/run"} {
+		if !strings.Contains(text, mount) {
+			t.Errorf("k8s/base/frontend.yaml missing writable mount %q", mount)
+		}
+	}
+	if strings.Count(text, "emptyDir:") < 3 {
+		t.Error("k8s/base/frontend.yaml must declare an emptyDir for each writable nginx directory")
+	}
+	if !strings.Contains(text, "type: NodePort") {
+		t.Error("frontend Service must be type: NodePort")
+	}
+}
+
+func TestFrontendKustomizationIncludesFrontend(t *testing.T) {
+	text := read(t, "k8s/base/kustomization.yaml")
+	if !strings.Contains(text, "frontend.yaml") {
+		t.Fatal("base kustomization must include frontend.yaml")
+	}
+}
+
+func TestComposeAddsSameOriginFrontendAndHidesGatewayFromHost(t *testing.T) {
+	text := read(t, "docker-compose.yml")
+	if !strings.Contains(text, "127.0.0.1:${FRONTEND_PORT:-8088}:8080") {
+		t.Fatal("compose must publish the frontend on 127.0.0.1:${FRONTEND_PORT:-8088}:8080")
+	}
+	gatewayIdx := strings.Index(text, "api-gateway:")
+	if gatewayIdx < 0 {
+		t.Fatal("compose must define api-gateway service")
+	}
+	frontendIdx := strings.Index(text, "\n  frontend:")
+	if frontendIdx < 0 {
+		t.Fatal("compose must define a frontend service")
+	}
+	gatewayBlockEnd := len(text)
+	if frontendIdx > gatewayIdx {
+		gatewayBlockEnd = frontendIdx
+	}
+	gatewayBlock := text[gatewayIdx:gatewayBlockEnd]
+	if strings.Contains(gatewayBlock, "ports:") {
+		t.Error("api-gateway must no longer publish a host port once the frontend is the same-origin entrypoint")
+	}
+	if !strings.Contains(gatewayBlock, `expose: ["8080"]`) {
+		t.Error("api-gateway must still expose 8080 on the compose network")
+	}
+}
+
+func TestDockerignoreExcludesBuildArtifactsFromFrontendContext(t *testing.T) {
+	// The frontend image is built with `docker build ... frontend` (and Compose
+	// build.context: ../frontend), so Docker only honors the .dockerignore that
+	// lives at the root of that build context, not the repository root one.
+	frontendIgnore := read(t, "../frontend/.dockerignore")
+	for _, required := range []string{"node_modules", "dist", "test-results", "playwright-report", "coverage"} {
+		if !strings.Contains(frontendIgnore, required) {
+			t.Errorf("frontend/.dockerignore must exclude %q from the frontend build context", required)
+		}
+	}
+
+	rootIgnore := read(t, "../.dockerignore")
+	for _, required := range []string{"node_modules", "dist", "test-results", "playwright-report", "coverage"} {
+		if !strings.Contains(rootIgnore, required) {
+			t.Errorf("root .dockerignore must also exclude %q for consistency", required)
+		}
+	}
+}
+
+func TestE2EAndOperatorHintsPointToTheFrontendEntrypoint(t *testing.T) {
+	// Since Task 8, api-gateway no longer publishes a host port; every
+	// operator-facing BASE_URL/test-e2e hint must point at the same-origin
+	// frontend entrypoint (127.0.0.1:8088) instead of the retired gateway
+	// host port (127.0.0.1:8080), or E2E runs will fail to even connect.
+	for _, name := range []string{"../tests/e2e/fitness_flow_test.go", "../Makefile", "../README.md"} {
+		text := read(t, name)
+		if strings.Contains(text, "127.0.0.1:8080") {
+			t.Errorf("%s still references the retired gateway host port 127.0.0.1:8080; it must point at the frontend entrypoint 127.0.0.1:8088", name)
+		}
+	}
+	if !strings.Contains(read(t, "../tests/e2e/fitness_flow_test.go"), "127.0.0.1:8088") {
+		t.Error("tests/e2e/fitness_flow_test.go must hint at BASE_URL=http://127.0.0.1:8088")
 	}
 }
 

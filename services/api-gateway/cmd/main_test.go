@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 
 func TestProductionDependenciesWireReadiness(t *testing.T) {
 	cs := &gatewayclients.Clients{}
-	d := productionDependencies(cs, "secret", nil)
+	d := productionDependencies(cs, "secret", nil, gatewayhttp.RefreshCookieConfig{})
 	if d.Ready == nil {
 		t.Fatal("production readiness is not wired")
 	}
@@ -24,6 +25,35 @@ func TestProductionDependenciesWireReadiness(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz status=%d", w.Code)
+	}
+}
+
+func TestLoadRequiresAllowedOriginsAndTrimsList(t *testing.T) {
+	for _, key := range []string{"JWT_SECRET", "ALLOWED_ORIGINS", "REFRESH_COOKIE_SECURE"} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+	t.Setenv("JWT_SECRET", "secret")
+
+	if _, err := load(); err == nil {
+		t.Fatal("expected error when ALLOWED_ORIGINS is missing")
+	}
+
+	t.Setenv("ALLOWED_ORIGINS", " http://localhost:5173 , http://127.0.0.1:5173 ")
+	cfg, err := load()
+	if err != nil {
+		t.Fatalf("load() error = %v", err)
+	}
+	if len(cfg.AllowedOrigins) != 2 {
+		t.Fatalf("AllowedOrigins = %#v, want 2 trimmed entries", cfg.AllowedOrigins)
+	}
+	for _, origin := range []string{"http://localhost:5173", "http://127.0.0.1:5173"} {
+		if _, ok := cfg.AllowedOrigins[origin]; !ok {
+			t.Fatalf("AllowedOrigins missing trimmed origin %q: %#v", origin, cfg.AllowedOrigins)
+		}
+	}
+	if cfg.CookieSecure {
+		t.Fatal("CookieSecure should default to false")
 	}
 }
 
