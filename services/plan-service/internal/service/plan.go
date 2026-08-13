@@ -69,7 +69,15 @@ func (s *Service) CreatePlan(c context.Context, u string, in CreatePlanInput) (m
 		return model.Plan{}, apperror.InvalidArgument("name is required")
 	}
 	now := time.Now().UTC()
-	p := model.Plan{ID: uuid.NewString(), UserID: u, Name: in.Name, Status: "draft", IdempotencyKey: in.IdempotencyKey, CreatedAt: now, UpdatedAt: now}
+	p := model.Plan{
+		ID:             uuid.NewString(),
+		UserID:         u,
+		Name:           in.Name,
+		Status:         "draft",
+		IdempotencyKey: in.IdempotencyKey,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
 	return p, s.repo.CreatePlan(c, &p)
 }
 func (s *Service) GetPlan(c context.Context, u, id string) (model.Plan, error) {

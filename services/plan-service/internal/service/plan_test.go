@@ -31,6 +31,17 @@ func (f fakeRepo) GetItem(context.Context, string, string, string) (model.Workou
 }
 func (fakeRepo) UpdateItem(context.Context, *model.WorkoutItem) error     { return nil }
 func (fakeRepo) DeleteItem(context.Context, string, string, string) error { return nil }
+
+func TestCreatePlanStartsDraftUntilScheduleIsComplete(t *testing.T) {
+	plan, err := New(fakeRepo{}).CreatePlan(context.Background(), "u", CreatePlanInput{Name: "力量训练"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Status != "draft" {
+		t.Fatalf("CreatePlan() status = %q, want draft", plan.Status)
+	}
+}
+
 func TestValidation(t *testing.T) {
 	s := New(fakeRepo{})
 	if apperror.CodeOf(func() error {

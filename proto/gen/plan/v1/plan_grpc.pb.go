@@ -34,6 +34,9 @@ const (
 	PlanService_DeleteWorkoutItem_FullMethodName = "/plan.v1.PlanService/DeleteWorkoutItem"
 	PlanService_GetWorkoutItem_FullMethodName    = "/plan.v1.PlanService/GetWorkoutItem"
 	PlanService_ListWorkoutItems_FullMethodName  = "/plan.v1.PlanService/ListWorkoutItems"
+	PlanService_CreateWeeklyPlan_FullMethodName  = "/plan.v1.PlanService/CreateWeeklyPlan"
+	PlanService_GetWeeklyPlan_FullMethodName     = "/plan.v1.PlanService/GetWeeklyPlan"
+	PlanService_ReplaceWeeklyPlan_FullMethodName = "/plan.v1.PlanService/ReplaceWeeklyPlan"
 )
 
 // PlanServiceClient is the client API for PlanService service.
@@ -55,6 +58,9 @@ type PlanServiceClient interface {
 	DeleteWorkoutItem(ctx context.Context, in *DeleteWorkoutItemRequest, opts ...grpc.CallOption) (*Empty, error)
 	GetWorkoutItem(ctx context.Context, in *GetWorkoutItemRequest, opts ...grpc.CallOption) (*WorkoutItemResponse, error)
 	ListWorkoutItems(ctx context.Context, in *ListWorkoutItemsRequest, opts ...grpc.CallOption) (*ListWorkoutItemsResponse, error)
+	CreateWeeklyPlan(ctx context.Context, in *CreateWeeklyPlanRequest, opts ...grpc.CallOption) (*WeeklyPlanResponse, error)
+	GetWeeklyPlan(ctx context.Context, in *GetWeeklyPlanRequest, opts ...grpc.CallOption) (*WeeklyPlanResponse, error)
+	ReplaceWeeklyPlan(ctx context.Context, in *ReplaceWeeklyPlanRequest, opts ...grpc.CallOption) (*WeeklyPlanResponse, error)
 }
 
 type planServiceClient struct {
@@ -215,6 +221,36 @@ func (c *planServiceClient) ListWorkoutItems(ctx context.Context, in *ListWorkou
 	return out, nil
 }
 
+func (c *planServiceClient) CreateWeeklyPlan(ctx context.Context, in *CreateWeeklyPlanRequest, opts ...grpc.CallOption) (*WeeklyPlanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WeeklyPlanResponse)
+	err := c.cc.Invoke(ctx, PlanService_CreateWeeklyPlan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *planServiceClient) GetWeeklyPlan(ctx context.Context, in *GetWeeklyPlanRequest, opts ...grpc.CallOption) (*WeeklyPlanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WeeklyPlanResponse)
+	err := c.cc.Invoke(ctx, PlanService_GetWeeklyPlan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *planServiceClient) ReplaceWeeklyPlan(ctx context.Context, in *ReplaceWeeklyPlanRequest, opts ...grpc.CallOption) (*WeeklyPlanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WeeklyPlanResponse)
+	err := c.cc.Invoke(ctx, PlanService_ReplaceWeeklyPlan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PlanServiceServer is the server API for PlanService service.
 // All implementations must embed UnimplementedPlanServiceServer
 // for forward compatibility
@@ -234,6 +270,9 @@ type PlanServiceServer interface {
 	DeleteWorkoutItem(context.Context, *DeleteWorkoutItemRequest) (*Empty, error)
 	GetWorkoutItem(context.Context, *GetWorkoutItemRequest) (*WorkoutItemResponse, error)
 	ListWorkoutItems(context.Context, *ListWorkoutItemsRequest) (*ListWorkoutItemsResponse, error)
+	CreateWeeklyPlan(context.Context, *CreateWeeklyPlanRequest) (*WeeklyPlanResponse, error)
+	GetWeeklyPlan(context.Context, *GetWeeklyPlanRequest) (*WeeklyPlanResponse, error)
+	ReplaceWeeklyPlan(context.Context, *ReplaceWeeklyPlanRequest) (*WeeklyPlanResponse, error)
 	mustEmbedUnimplementedPlanServiceServer()
 }
 
@@ -285,6 +324,15 @@ func (UnimplementedPlanServiceServer) GetWorkoutItem(context.Context, *GetWorkou
 }
 func (UnimplementedPlanServiceServer) ListWorkoutItems(context.Context, *ListWorkoutItemsRequest) (*ListWorkoutItemsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListWorkoutItems not implemented")
+}
+func (UnimplementedPlanServiceServer) CreateWeeklyPlan(context.Context, *CreateWeeklyPlanRequest) (*WeeklyPlanResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateWeeklyPlan not implemented")
+}
+func (UnimplementedPlanServiceServer) GetWeeklyPlan(context.Context, *GetWeeklyPlanRequest) (*WeeklyPlanResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetWeeklyPlan not implemented")
+}
+func (UnimplementedPlanServiceServer) ReplaceWeeklyPlan(context.Context, *ReplaceWeeklyPlanRequest) (*WeeklyPlanResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReplaceWeeklyPlan not implemented")
 }
 func (UnimplementedPlanServiceServer) mustEmbedUnimplementedPlanServiceServer() {}
 
@@ -569,6 +617,60 @@ func _PlanService_ListWorkoutItems_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PlanService_CreateWeeklyPlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateWeeklyPlanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanServiceServer).CreateWeeklyPlan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanService_CreateWeeklyPlan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanServiceServer).CreateWeeklyPlan(ctx, req.(*CreateWeeklyPlanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlanService_GetWeeklyPlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWeeklyPlanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanServiceServer).GetWeeklyPlan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanService_GetWeeklyPlan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanServiceServer).GetWeeklyPlan(ctx, req.(*GetWeeklyPlanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PlanService_ReplaceWeeklyPlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplaceWeeklyPlanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PlanServiceServer).ReplaceWeeklyPlan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PlanService_ReplaceWeeklyPlan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PlanServiceServer).ReplaceWeeklyPlan(ctx, req.(*ReplaceWeeklyPlanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PlanService_ServiceDesc is the grpc.ServiceDesc for PlanService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -635,6 +737,18 @@ var PlanService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListWorkoutItems",
 			Handler:    _PlanService_ListWorkoutItems_Handler,
+		},
+		{
+			MethodName: "CreateWeeklyPlan",
+			Handler:    _PlanService_CreateWeeklyPlan_Handler,
+		},
+		{
+			MethodName: "GetWeeklyPlan",
+			Handler:    _PlanService_GetWeeklyPlan_Handler,
+		},
+		{
+			MethodName: "ReplaceWeeklyPlan",
+			Handler:    _PlanService_ReplaceWeeklyPlan_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

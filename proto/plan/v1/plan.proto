@@ -21,6 +21,56 @@ message AddWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; W
 message UpdateWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; string workout_item_id = 3; WorkoutItem item = 4; }
 message DeleteWorkoutItemRequest { string user_id = 1; string workout_day_id = 2; string workout_item_id = 3; }
 message WorkoutItemResponse { WorkoutItem item = 1; }
+message WeeklyItemInput {
+  string id = 1;
+  string name = 2;
+  int32 sets = 3;
+  int32 repetitions = 4;
+  double weight = 5;
+  int32 duration_seconds = 6;
+}
+message WeeklyWorkoutInput {
+  string id = 1;
+  int32 weekday = 2;
+  string title = 3;
+  repeated WeeklyItemInput items = 4;
+}
+message WeeklyPlanInput {
+  string name = 1;
+  string status = 2;
+  repeated WeeklyWorkoutInput days = 3;
+}
+message WeeklyWorkout {
+  string id = 1;
+  string plan_id = 2;
+  int32 weekday = 3;
+  string title = 4;
+  repeated WorkoutItem items = 5;
+  string created_at = 6;
+  string updated_at = 7;
+}
+message WeeklyPlanDocument {
+  Plan plan = 1;
+  repeated WeeklyWorkout days = 2;
+}
+message CreateWeeklyPlanRequest {
+  string user_id = 1;
+  string idempotency_key = 2;
+  WeeklyPlanInput weekly_plan = 3;
+}
+message GetWeeklyPlanRequest {
+  string user_id = 1;
+  string plan_id = 2;
+}
+message ReplaceWeeklyPlanRequest {
+  string user_id = 1;
+  string plan_id = 2;
+  string expected_updated_at = 3;
+  WeeklyPlanInput weekly_plan = 4;
+}
+message WeeklyPlanResponse {
+  WeeklyPlanDocument weekly_plan = 1;
+}
 message Empty {}
 service PlanService {
   rpc CreatePlan(CreatePlanRequest) returns (PlanResponse);
@@ -38,6 +88,9 @@ service PlanService {
   rpc DeleteWorkoutItem(DeleteWorkoutItemRequest) returns (Empty);
   rpc GetWorkoutItem(GetWorkoutItemRequest) returns (WorkoutItemResponse);
   rpc ListWorkoutItems(ListWorkoutItemsRequest) returns (ListWorkoutItemsResponse);
+  rpc CreateWeeklyPlan(CreateWeeklyPlanRequest) returns (WeeklyPlanResponse);
+  rpc GetWeeklyPlan(GetWeeklyPlanRequest) returns (WeeklyPlanResponse);
+  rpc ReplaceWeeklyPlan(ReplaceWeeklyPlanRequest) returns (WeeklyPlanResponse);
 }
 message GetWorkoutDayRequest { string user_id = 1; string plan_id = 2; string workout_day_id = 3; }
 message ListWorkoutDaysRequest { string user_id = 1; string plan_id = 2; PageRequest page = 3; }
