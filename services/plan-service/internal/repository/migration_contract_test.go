@@ -7,11 +7,13 @@ import (
 )
 
 func TestMigrationSourceDoesNotCreateSchema(t *testing.T) {
-	data, err := os.ReadFile("repository.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(strings.ToUpper(string(data)), "CREATE SCHEMA") {
-		t.Fatal("plan migration must not create schema")
+	for _, file := range []string{"repository.go", "weekly_migration.go"} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.ToUpper(string(data)), "CREATE SCHEMA") {
+			t.Fatalf("plan migration must not create schema: %s", file)
+		}
 	}
 }

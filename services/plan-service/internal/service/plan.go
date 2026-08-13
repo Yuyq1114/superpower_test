@@ -123,6 +123,19 @@ func (s *Service) ListPlans(c context.Context, u string, page, size int) (Page[m
 	items, total, e := s.repo.ListPlans(c, u, page, size)
 	return Page[model.Plan]{Items: items, Page: page, PageSize: size, Total: total}, e
 }
+
+// isoWeekday converts Go's Sunday-based weekday to the ISO numbering the
+// weekly schedule stores: 1=Monday .. 7=Sunday.
+func isoWeekday(t time.Time) int {
+	weekday := int(t.Weekday())
+	if weekday == 0 {
+		return 7
+	}
+	return weekday
+}
+
+// AddWorkoutDay is the legacy date-based entry point; it keeps writing
+// workout_date while dual-populating the weekday the weekly schema keys on.
 func (s *Service) AddWorkoutDay(c context.Context, u, pid string, in WorkoutDayInput) (model.WorkoutDay, error) {
 	if _, e := s.GetPlan(c, u, pid); e != nil {
 		return model.WorkoutDay{}, e
@@ -131,7 +144,8 @@ func (s *Service) AddWorkoutDay(c context.Context, u, pid string, in WorkoutDayI
 		return model.WorkoutDay{}, apperror.InvalidArgument("date is required")
 	}
 	now := time.Now().UTC()
-	d := model.WorkoutDay{ID: uuid.NewString(), UserID: u, PlanID: pid, Date: in.Date.UTC(), IdempotencyKey: in.IdempotencyKey, CreatedAt: now, UpdatedAt: now}
+	date := in.Date.UTC()
+	d := model.WorkoutDay{ID: uuid.NewString(), UserID: u, PlanID: pid, Date: &date, Weekday: isoWeekday(date), IdempotencyKey: in.IdempotencyKey, CreatedAt: now, UpdatedAt: now}
 	return d, s.repo.CreateDay(c, &d)
 }
 func (s *Service) UpdateWorkoutDay(c context.Context, u, pid, did string, in WorkoutDayInput) (model.WorkoutDay, error) {
@@ -151,7 +165,9 @@ func (s *Service) UpdateWorkoutDay(c context.Context, u, pid, did string, in Wor
 	if e != nil {
 		return d, e
 	}
-	d.Date = in.Date.UTC()
+	date := in.Date.UTC()
+	d.Date = &date
+	d.Weekday = isoWeekday(date)
 	d.UpdatedAt = time.Now().UTC()
 	return d, s.repo.UpdateDay(c, &d)
 }

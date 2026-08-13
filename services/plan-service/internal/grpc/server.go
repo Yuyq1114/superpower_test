@@ -61,7 +61,11 @@ func plan(p model.Plan) *planv1.Plan {
 	return &planv1.Plan{Id: p.ID, UserId: p.UserID, Name: p.Name, Status: p.Status, CreatedAt: formatTime(p.CreatedAt), UpdatedAt: formatTime(p.UpdatedAt)}
 }
 func day(d model.WorkoutDay) *planv1.WorkoutDay {
-	return &planv1.WorkoutDay{Id: d.ID, PlanId: d.PlanID, Date: d.Date.Format("2006-01-02"), CreatedAt: formatTime(d.CreatedAt), UpdatedAt: formatTime(d.UpdatedAt)}
+	date := ""
+	if d.Date != nil {
+		date = d.Date.Format("2006-01-02")
+	}
+	return &planv1.WorkoutDay{Id: d.ID, PlanId: d.PlanID, Date: date, CreatedAt: formatTime(d.CreatedAt), UpdatedAt: formatTime(d.UpdatedAt)}
 }
 func item(i model.WorkoutItem) *planv1.WorkoutItem {
 	return &planv1.WorkoutItem{Id: i.ID, WorkoutDayId: i.WorkoutDayID, Name: i.Name, Sets: int32(i.Sets), Repetitions: int32(i.Repetitions), Weight: i.Weight, DurationSeconds: int32(i.DurationSeconds), CreatedAt: formatTime(i.CreatedAt), UpdatedAt: formatTime(i.UpdatedAt)}

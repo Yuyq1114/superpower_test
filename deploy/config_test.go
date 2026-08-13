@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -25,23 +26,65 @@ func TestStatisticsIntegrationSuitesHaveBuildTag(t *testing.T) {
 		filepath.Join("services", "statistics-service", "internal", "repository", "integration_test.go"),
 	}
 	for _, file := range files {
-		f, err := os.Open(filepath.Join(repoRoot, file))
+		requireIntegrationBuildTag(t, repoRoot, file)
+	}
+}
+
+// TestPlanIntegrationSuitesHaveBuildTag guards the whole plan repository
+// package instead of a fixed list: any test file there that opens PostgreSQL
+// would otherwise run during a plain `go test ./...` and fail without a
+// database.
+func TestPlanIntegrationSuitesHaveBuildTag(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	dir := filepath.Join("services", "plan-service", "internal", "repository")
+	entries, err := os.ReadDir(filepath.Join(repoRoot, dir))
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file := filepath.Join(dir, name)
+		data, err := os.ReadFile(filepath.Join(repoRoot, file))
 		if err != nil {
 			t.Fatalf("read %s: %v", file, err)
 		}
-		scanner := bufio.NewScanner(f)
-		firstLineOK := scanner.Scan() && scanner.Text() == "//go:build integration"
-		secondLineOK := scanner.Scan() && scanner.Text() == ""
-		if err := scanner.Err(); err != nil {
-			f.Close()
-			t.Fatalf("read %s: %v", file, err)
+		if !opensPostgres(string(data)) {
+			continue
 		}
-		if err := f.Close(); err != nil {
-			t.Fatalf("close %s: %v", file, err)
+		requireIntegrationBuildTag(t, repoRoot, file)
+	}
+}
+
+func opensPostgres(source string) bool {
+	for _, marker := range []string{"TEST_DATABASE_ADMIN_DSN", "TEST_DATABASE_DSN", "postgres.Open", "storage.OpenPostgres", "integrationRepo(", "openPostgres("} {
+		if strings.Contains(source, marker) {
+			return true
 		}
-		if !firstLineOK || !secondLineOK {
-			t.Errorf("%s must start with //go:build integration followed by a blank line", file)
-		}
+	}
+	return false
+}
+
+func requireIntegrationBuildTag(t *testing.T, repoRoot, file string) {
+	t.Helper()
+	f, err := os.Open(filepath.Join(repoRoot, file))
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	scanner := bufio.NewScanner(f)
+	firstLineOK := scanner.Scan() && scanner.Text() == "//go:build integration"
+	secondLineOK := scanner.Scan() && scanner.Text() == ""
+	if err := scanner.Err(); err != nil {
+		f.Close()
+		t.Fatalf("read %s: %v", file, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", file, err)
+	}
+	if !firstLineOK || !secondLineOK {
+		t.Errorf("%s must start with //go:build integration followed by a blank line", file)
 	}
 }
 
